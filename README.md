@@ -8,9 +8,15 @@
 
 Fay数字人助理版是fay开源项目的重要分支，专注于构建智能数字助理的开源解决方案。它提供了灵活的模块化设计，使开发人员能够定制和组合各种功能模块，包括情绪分析、NLP处理、语音合成和语音输出等。Fay数字人助理版为开发人员提供了强大的工具和资源，用于构建智能、个性化和多功能的数字助理应用。通过该版本，开发人员可以轻松创建适用于各种场景和领域的数字人助理，为用户提供智能化的语音交互和个性化服务。
 
-## **推荐集成**
+## **推荐玩法**
 
-集成VisualGLM：B站视频
+
+
+灵聚NLP api(支持GPT3.5及多应用)：https://m.bilibili.com/video/BV1NW4y1D76a
+
+集成本地唇型算法：https://www.bilibili.com/video/BV1Zh4y1g7o7/?buvid=XXDD0B5DD6C43C070DF9E7E67930FC48B24DF&is_story_h5=false&mid=Pvwl%2Ft1ahPM726k1L4%2FnRA%3D%3D&plat_id=202&share_from=ugc&share_medium=android&share_plat=android&share_source=WEIXIN&share_tag=s_i&timestamp=1686926382&unique_k=Jdqazy3&up_id=2111554564
+
+给数字人加上眼睛（集成yolo+VisualGLM)：B站视频
 
 给Fay加上本地免费语音识别（达摩院funaar）: https://www.bilibili.com/video/BV1qs4y1g74e/?share_source=copy_web&vd_source=64cd9062f5046acba398177b62bea9ad
 
@@ -18,7 +24,7 @@ Fay数字人助理版是fay开源项目的重要分支，专注于构建智能�
 
 UE5工程：https://github.com/xszyou/fay-ue5
 
-视频三维重建（真人2D驱动）：https://github.com/waityousea/xuniren
+真人视频三维重建（NeRF）：https://github.com/waityousea/xuniren
 
 
 
@@ -55,9 +61,13 @@ UE5工程：https://github.com/xszyou/fay-ue5
 
 ![](images/UElucky.png)
 
-工程及运行包：https://github.com/xszyou/fay-ue5
+工程：https://github.com/xszyou/fay-ue5
 
-通讯地址: [`ws://127.0.0.1:10002`](ws://127.0.0.1:10002)（已接通）
+
+
+重要：
+
+Fay（服务端）与数字人的通讯接口: [`ws://127.0.0.1:10002`](ws://127.0.0.1:10002)（已接通）
 
 消息格式: 查看 [WebSocket.md](https://github.com/TheRamU/Fay/blob/main/WebSocket.md)
 
@@ -79,7 +89,7 @@ UE5工程：https://github.com/xszyou/fay-ue5
 
 ## **二、Fay控制器核心逻辑**
 
-![](images/luoji.png)
+![](images/luoji.jpg)
 
  **注：**
 
@@ -97,10 +107,11 @@ UE5工程：https://github.com/xszyou/fay-ue5
 ├── ai_module
 │   ├── ali_nls.py			# 阿里云 实时语音
 │   ├── ms_tts_sdk.py       # 微软 文本转语音
+│   ├── nlp_lingju.py       # 灵聚 人机交互-自然语言处理
 │   ├── xf_aiui.py          # 讯飞 人机交互-自然语言处理
-│   ├── chatgpt.py          # gpt3.5对接
-│   ├── nlp_gpt.py          # 对接chat.openai.com(免key)
-│   ├── yuan_1_0.py         # 浪潮.源大模型对接
+│   ├── nlp_gpt.py          # gpt api对接
+│   ├── nlp_chatgpt.py      # chat.openai.com逆向对接
+│   ├── nlp_yuan.py         # 浪潮.源大模型对接
 │   ├── nlp_rasa.py         # ChatGLM-6B的基础上前置Rasa会话管理(强烈推荐)
 │   ├── nlp_VisualGLM.py    # 对接多模态大语言模型VisualGLM-6B
 │   ├── yolov8.py           # yolov8资态识别
@@ -110,6 +121,10 @@ UE5工程：https://github.com/xszyou/fay-ue5
 │   ├── fay_core.py         # 数字人核心模块
 │   ├── recorder.py         # 录音器
 │   ├── tts_voice.py        # 语音生源枚举
+│   ├── authorize_tb.py     # fay.db认证表管理
+│   ├── content_db.py       # fay.db内容表管理
+│   ├── interact.py         # 互动（消息）对象
+│   ├── song_player.py      # 音乐播放（暂不可用）
 │   └── wsa_server.py       # WebSocket 服务端
 ├── gui                     # 图形界面
 │   ├── flask_server.py     # Flask 服务端
@@ -127,6 +142,25 @@ UE5工程：https://github.com/xszyou/fay-ue5
 
 
 ## **三、升级日志**
+**2023.07.05：**
+
++ 修复无法运行唇型算法而导致的不播放声音问题。
+
+**2023.06.28：**
+
++ 重构NLP模块管理逻辑，便于自由扩展；
++ gpt：拆分为ChatGPT及GPT、更换新的GPT接口、可单独配置代理服务器；
++ 指定yolov8包版本，解决yolo不兼容问题；
++ 修复：自言自语bug、接收多个待处理消息bug。
+
+**2023.06.21：**
+
++ 集成灵聚NLP api(支持GPT3.5及多应用)；
++ ui修正。
+
+**2023.06.17：**
+
++ 集成本地唇型算法。
 
 **2023.06.14：**
 
@@ -185,9 +219,9 @@ python main.py
 | ./ai_module/ms_tts_sdk.py | 微软 文本转情绪语音（非必须，不配置时使用免费的edge-tts） | https://azure.microsoft.com/zh-cn/services/cognitive-services/text-to-speech/ |
 | ./ai_module/xf_ltp.py     | 讯飞 情感分析              | https://www.xfyun.cn/service/emotion-analysis                |
 | ./utils/ngrok_util.py     | ngrok.cc 外网穿透（可选）  | http://ngrok.cc                                              |
+| ./ai_module/nlp_lingju.py | 灵聚NLP api(支持GPT3.5及多应用)（NLP多选1） | https://open.lingju.ai   需联系客服务开通gpt3.5权限|
 | ./ai_module/yuan_1_0.py    | 浪潮源大模型（NLP 多选1） | https://air.inspur.com/                                              |
 | ./ai_module/chatgpt.py     | ChatGPT（NLP多选1） | *******                                              |
-| ./ai_module/xf_aiui.py    | 讯飞自然语言处理（NLP多选1）  | https://aiui.xfyun.cn/solution/webapi                        |
 | ./ai_module/nlp_rasa.py    | ChatGLM-6B的基础上前置Rasa会话管理（NLP 多选1）  | https://m.bilibili.com/video/BV1D14y1f7pr |
 | ./ai_module/nlp_VisualGLM.py | 对接VisualGLM-6B多模态单机离线大语言模型（NLP 多选1） | B站视频 |
 
