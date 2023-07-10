@@ -28,7 +28,7 @@ class Recorder:
         self.__processing = False
         self.__history_level = []
         self.__history_data = []
-        self.__dynamic_threshold = 0.35 # 声音识别的音量阈值
+        self.__dynamic_threshold = 0.7 # 声音识别的音量阈值
 
         self.__MAX_LEVEL = 25000
         self.__MAX_BLOCK = 100
@@ -104,11 +104,13 @@ class Recorder:
             data = stream.read(1024, exception_on_overflow=False)
             if not data:
                 continue
-            #只获取第一声道
-            data = np.frombuffer(data, dtype=np.int16)
-            data = np.reshape(data, (-1, cfg.config['source']['record']['channels']))  # reshaping the array to split the channels
-            mono = data[:, 0]  # taking the first channel
-            data = mono.tobytes()  
+            
+            if cfg.config['source']['record'].get("channels"):
+                #只获取第一声道
+                data = np.frombuffer(data, dtype=np.int16)
+                data = np.reshape(data, (-1, cfg.config['source']['record']['channels']))  # reshaping the array to split the channels
+                mono = data[:, 0]  # taking the first channel
+                data = mono.tobytes()  
 
             level = audioop.rms(data, 2)
             if len(self.__history_data) >= 5:
