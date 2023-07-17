@@ -1,9 +1,6 @@
 
-from winreg import QueryInfoKey
 from openpyxl import load_workbook
 import difflib
-import shlex
-import subprocess
 from utils import config_util as cfg
 
 def question(query_type,text):
@@ -44,7 +41,6 @@ class QAService:
             answer = self.__get_keyword(answer_dict, text)
         elif query_type == 'command':
             answer = self.__get_keyword(self.command_keyword, text)
-        print(answer)
         return answer
     
 
