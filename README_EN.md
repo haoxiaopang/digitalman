@@ -46,11 +46,11 @@ ProTip:The shopping edition has been moved to a separate branch.[`fay-sales-edit
          
 　　　　　　　　 Azure ─┐　 　 │　　 　 ├─ [VisualGLM](https://www.bilibili.com/video/BV1mP411Q7mj)
             
-　　　　　 　 Edge TTS ─┼──     TTS 　　 └─ [RWKV](https://www.bilibili.com/video/BV1yu41157zB)
+　　　　　 　 Edge TTS ─┼──     TTS 　  　 └─ [RWKV](https://www.bilibili.com/video/BV1yu41157zB)
        
 　   　　[Open source TTS](https://www.bilibili.com/read/cv25192534) ─┘　  │　　 　 
             
-　                                                     │　　 　 
+　　　　　　　　　　　　　　    │　　 　 
          
 　　　　　　　　　　　　　　   │　　 　 
                 
@@ -122,34 +122,43 @@ Message format: View [WebSocket.md](https://github.com/TheRamU/Fay/blob/main/Web
 
 ## **Upgrade Log**
 
-**2023.07.21：**
+**2023.08.04:**
+
+- UE5 project updated.
+- Audio-visual pixel for lip-reading is replaced by 33ms.
+- Built-in rwkv_api nlp can be used directly.
+- The frequency of emotional pushing to digital human terminal is reduced.
+- No interface message is generated when the digital human is not connected.
+- The problem that the playback information is not pushed to the digital human terminal with a certain probability due to the wrong mp3 format is fixed.
+- The problem that the nlp logic is ended early when commands such as mute are executed, and the user's question message is not pushed to the digital human terminal is fixed.
+- wav file startup cleaning is supplemented.
+- WebSocket tool class is upgraded and improved.
+
+**2023.07：**
+
++ Add runtime automatic cleaning of UI cache;
++  Add GPT proxy setting can be null;
++ Improve the stability of Lingju docking.
 
 + Fixed the problem of generating a large amount of WS information before connecting digital humans;
 +  Add digital human (UE, Live2D, Xuniren) communication interface: real-time logs;
 + Update digital human (UE, Live2D, Xuniren) communication interface: audio push.
 
-**2023.07.21：**
-
 + Multiple updates for the merchandise version.
 
-**2023.07.19：**
 + Fixed the issue of remote voice recognition.
 + Fixed the issue of occasional unresponsiveness during ASR (Automatic Speech Recognition).
 + Removed the singing command.
-
-**2023.07.14：**
 
 + Fixed Linux and macOS runtime errors.
 + Fixed the issue of being unable to continue execution due to lip-sync errors.
 + Provided an integration solution for RWKV.
 
-**2023.07.12：**
-
 + Fixed an issue in Assistant Edition where text input does not read persona responses.
 + Fixed an issue in Assistant Edition where text input does not read QA responses.
 + Enhanced microphone stability.
 
-**2023.07.05：**
+****
 
 + Fixed a sound playback issue caused by the inability to run the lip-sync algorithm.
 
