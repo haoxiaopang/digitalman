@@ -40,6 +40,7 @@
         "Lips":[{"Lip": "sil", "Time": 180}, {"Lip": "FF", "Time": 144}],
         "Time": 10,
         "Type": "interact"
+        ""
     }
 }
 ```

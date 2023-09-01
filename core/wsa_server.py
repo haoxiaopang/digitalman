@@ -158,7 +158,7 @@ class HumanServer(MyServer):
         
 
     def on_send_handler(self, message):
-        util.log(1, '向human发送 {}'.format(message))
+        # util.log(1, '向human发送 {}'.format(message))
         if not self.isConnect:
             return None
         return message
