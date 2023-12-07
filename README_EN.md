@@ -122,6 +122,46 @@ Message format: View [WebSocket.md](https://github.com/TheRamU/Fay/blob/main/Web
 
 ## **Upgrade Log**
 
+**2023.12.04**
+
+- Connect to fastgpt nlp;
+
+- Fix the issue of abnormal lip shape reporting errors;
+
+**2023.11.27**
+
+- Improve the stability of websockets;
+
+- Fix the path issue of the lip shape program;
+
+- Improve the stability of SQLLITE.
+
+**2023.11.20**
+
+- Optimization and replacement of wake-up function;
+
+- Increase yolo stability;
+
+- Increase SQLLITE stability.
+
+**2023.11.13**
+
+- Fix the issue of missing wake-up word switch parameters in the configuration file;
+
+- Fix yolo stability issues;
+
+- New voices available for selection.
+
+**2023.11.06**
+
+- Update dependency packages: motion, pydub, flask~=3.0.0;
+
+- *Adding optional sentiment analysis for motion;
+
+- Fix bug in iFlytek sentiment analysis interface call;
+
+- Improve the logic for saving configuration.
+
 **2023.10.23**
 
 - Fix the issue of digital human connection state recognition errors caused by a certain low probability;

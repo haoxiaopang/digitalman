@@ -30,6 +30,7 @@ import pygame
 from utils import config_util as cfg
 from core.content_db import Content_Db
 from datetime import datetime
+from ai_module import nlp_cemotion
 
 from ai_module import nlp_rasa
 from ai_module import nlp_chatgpt
@@ -40,6 +41,7 @@ from ai_module import nlp_VisualGLM
 from ai_module import nlp_lingju
 from ai_module import nlp_rwkv_api
 from ai_module import nlp_ChatGLM2
+from ai_module import nlp_fastgpt
 
 import platform
 if platform.system() == "Windows":
@@ -55,7 +57,8 @@ modules = {
     "nlp_VisualGLM": nlp_VisualGLM,
     "nlp_lingju": nlp_lingju,
     "nlp_rwkv_api":nlp_rwkv_api,
-    "nlp_chatglm2": nlp_ChatGLM2
+    "nlp_chatglm2": nlp_ChatGLM2,
+    "nlp_fastgpt": nlp_fastgpt
 
 }
 
@@ -100,11 +103,11 @@ def send_for_answer(msg,sendto):
         contentdb.add_content('member','send',msg)
         textlist = []
         text = None
-        
         # 人设问答
         keyword = qa_service.question('Persona',msg)
         if keyword is not None:
             text = config_util.config["attribute"][keyword]
+
         # 全局问答
         if text is None:
             answer = qa_service.question('qa',msg)
@@ -157,6 +160,7 @@ class FeiFei:
         self.last_quest_time = time.time()
         self.playing = False
         self.muting = False
+        self.cemotion = None
 
 
     def __play_song(self):
@@ -212,10 +216,10 @@ class FeiFei:
                         content = {'Topic': 'Unreal', 'Data': {'Key': 'log', 'Value': ""}}
                         wsa_server.get_instance().add_cmd(content)
                 return "NO_ANSWER"
-        
+                      
         if text == '唤醒':
             return '您好，我是FAY智能助理，有什么可以帮您？'
-
+        
         # 人设问答
         keyword = qa_service.question('Persona',text)
         if keyword is not None:
@@ -334,12 +338,20 @@ class FeiFei:
         perception = config_util.config["interact"]["perception"]
         if typeIndex == 1:
             try:
-                result = xf_ltp.get_sentiment(self.q_msg)
-                chat_perception = perception["chat"]
-                if result == 2:
-                    self.mood = self.mood + (chat_perception / 200.0)
-                elif result == 0:
-                    self.mood = self.mood - (chat_perception / 100.0)
+                if cfg.ltp_mode == "cemotion":
+                    result = nlp_cemotion.get_sentiment(self.cemotion,self.q_msg)
+                    chat_perception = perception["chat"]
+                    if result >= 0.5 and result <= 1:
+                       self.mood = self.mood + (chat_perception / 200.0)
+                    elif result <= 0.2:
+                       self.mood = self.mood - (chat_perception / 100.0)
+                else:
+                    result = xf_ltp.get_sentiment(self.q_msg)
+                    chat_perception = perception["chat"]
+                    if result == 1:
+                        self.mood = self.mood + (chat_perception / 200.0)
+                    elif result == -1:
+                        self.mood = self.mood - (chat_perception / 100.0)
             except BaseException as e:
                 print("[System] 情绪更新错误！")
                 print(e)
@@ -431,7 +443,8 @@ class FeiFei:
                         viseme_list = lip_sync_generator.generate_visemes(os.path.abspath(file_url))
                         consolidated_visemes = lip_sync_generator.consolidate_visemes(viseme_list)
                         content["Data"]["Lips"] = consolidated_visemes
-                    except e:
+                    except Exception as e:
+                        print(e)
                         util.log(1, "唇型数字生成失败，无法使用新版ue5工程")
                 wsa_server.get_instance().add_cmd(content)
 
@@ -492,8 +505,12 @@ class FeiFei:
         self.sleep = sleep
 
     def start(self):
+        if cfg.ltp_mode == "cemotion":
+            from cemotion import Cemotion
+            self.cemotion = Cemotion()
         MyThread(target=self.__send_mood).start()
         MyThread(target=self.__auto_speak).start()
+
 
     def stop(self):
         self.__running = False

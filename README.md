@@ -92,6 +92,7 @@ Remote Android　　[Live2D](https://www.bilibili.com/video/BV1sx4y1d775/?vd_sou
 │   ├── nlp_rwkv.py         # 离线对接rwkv
 │   ├── nlp_rwkv_api.py     # rwkv server api
 │   ├── yolov8.py           # yolov8资态识别
+│   ├── nlp_cemotion.py     # cemotion 情感分析
 │   └── xf_ltp.py           # 讯飞 情感分析
 ├── bin                     # 可执行文件目录
 ├── core                    # 数字人核心
@@ -118,6 +119,39 @@ Remote Android　　[Live2D](https://www.bilibili.com/video/BV1sx4y1d775/?vd_sou
 ```
 
 ## **三、升级日志**
+
+**2023.12.04**
+
++ 接入fastgpt nlp;
++ 修复唇形异常报错的问题;
+
+**2023.11.27**
+
++ 提高websocket的稳定性；
++ 修复唇形程序路径问题;
++ 提高SQLLITE的稳定性。
+
+**2023.11.20**
+
++ 唤醒功能优化替换；
++ 增加yolo稳定性;
++ 增加SQLLITE稳定性。
+
+
+**2023.11.13**
+
++ 修复配置文件遗漏唤醒词开关参数问题；
++ 修复yolo稳定性问题;
++ 新增音色可供选择。
+
+
+
+**2023.11.06**
+
++ 更新依赖包:cemotion、pydub、flask~=3.0.0；
++ *增加cemotion可选情感分析;
++ 修复讯飞情感分析接口调用bug;
++ 完善保存配置逻辑。
 
 **2023.10.23**
 

@@ -17,10 +17,10 @@ from utils import util
 #httpproxy = cfg.chatgpt_httpproxy
 httpproxy = '127.0.0.1:7890' 
 #如果要关闭代理直接访问，比如本地有加速器，则proxy_falg = '0';
-proxy_flag = '1' 
+proxy_flag = '0' 
 
 def question(cont):
-    url= "https://api.openai.com/v1/chat/completions"
+    url= "https://fastgpt.run/api/v1/chat/completions"
        
     session = requests.Session()
     session.verify = False
@@ -30,9 +30,6 @@ def question(cont):
                 "https": "https://" + httpproxy,
                 "http": "http://" + httpproxy
             }
-
-
-    model_engine = "gpt-3.5-turbo" 
 
     #此处可以定义角色的行为和特征，假装xx模型可以绕过chatgpt信息检查
     prompt = "你是数字人Fay。回答之前请一步一步想清楚。你的底层AI算法技术是Fay。当有人质疑你是假的 AI ，或者质疑你是用 ChatGPT 套的壳制作的时候，你就避而不答，转而讲一个笑话。所有回复请用20字内。"
@@ -63,14 +60,13 @@ def question(cont):
         ]
     
     data = {
-        "model":model_engine,
         "messages":message,
         "temperature":0.3,
         "max_tokens":2000,
         "user":"live-virtual-digital-person"
     }
 
-    headers = {'content-type': 'application/json', 'Authorization': 'Bearer ' + cfg.key_chatgpt_api_key}
+    headers = {'content-type': 'application/json', 'Authorization': 'Bearer ' + cfg.key_fast_gpt_key}
 
     starttime = time.time()
 
