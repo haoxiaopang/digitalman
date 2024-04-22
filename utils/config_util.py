@@ -11,24 +11,24 @@ key_ali_nls_key_secret = None
 key_ali_nls_app_key = None
 key_ms_tts_key = None
 Key_ms_tts_region = None
-key_xf_ltp_app_id = None
-key_xf_ltp_api_key = None
+baidu_emotion_app_id = None
+baidu_emotion_api_key = None
+baidu_emotion_secret_key = None
 key_ngrok_cc_id = None
-key_yuan_1_0_account = None
-key_yuan_1_0_phone = None
-key_chatgpt_api_key = None
+key_gpt_api_key = None
 key_chat_module = None
+gpt_model_engine = None
 proxy_config = None
 ASR_mode = None
 local_asr_ip = None 
 local_asr_port = None 
 ltp_mode = None
-key_fast_api_key = None
 is_proxy = None
 key_xingchen_api_key = None
 xingchen_characterid = None
 gpt_base_url = None
-
+ollama_ip = None
+ollama_model = None
 
 
 def load_config():
@@ -39,12 +39,12 @@ def load_config():
     global key_ali_nls_app_key
     global key_ms_tts_key
     global key_ms_tts_region
-    global key_xf_ltp_app_id
-    global key_xf_ltp_api_key
+    global baidu_emotion_app_id
+    global baidu_emotion_secret_key
+    global baidu_emotion_api_key
     global key_ngrok_cc_id
-    global key_yuan_1_0_account
-    global key_yuan_1_0_phone
-    global key_chatgpt_api_key
+    global key_gpt_api_key
+    global gpt_model_engine
     global key_chat_module
     global key_lingju_api_key
     global key_lingju_api_authcode
@@ -53,12 +53,12 @@ def load_config():
     global local_asr_ip 
     global local_asr_port
     global ltp_mode 
-    global key_fast_gpt_key
     global is_proxy
     global key_xingchen_api_key
     global xingchen_characterid
     global gpt_base_url
-
+    global ollama_ip
+    global ollama_model
 
     system_config = ConfigParser()
     system_config.read('system.conf', encoding='UTF-8')
@@ -67,12 +67,12 @@ def load_config():
     key_ali_nls_app_key = system_config.get('key', 'ali_nls_app_key')
     key_ms_tts_key = system_config.get('key', 'ms_tts_key')
     key_ms_tts_region  = system_config.get('key', 'ms_tts_region')
-    key_xf_ltp_app_id = system_config.get('key', 'xf_ltp_app_id')
-    key_xf_ltp_api_key = system_config.get('key', 'xf_ltp_api_key')
+    baidu_emotion_app_id = system_config.get('key', 'baidu_emotion_app_id')
+    baidu_emotion_api_key = system_config.get('key', 'baidu_emotion_api_key')
+    baidu_emotion_secret_key = system_config.get('key', 'baidu_emotion_secret_key')
     key_ngrok_cc_id = system_config.get('key', 'ngrok_cc_id')
-    key_yuan_1_0_account = system_config.get('key', 'yuan_1_0_account')
-    key_yuan_1_0_phone = system_config.get('key', 'yuan_1_0_phone')
-    key_chatgpt_api_key = system_config.get('key', 'chatgpt_api_key')
+    key_gpt_api_key = system_config.get('key', 'gpt_api_key')
+    gpt_model_engine = system_config.get('key', 'gpt_model_engine')
     key_chat_module = system_config.get('key', 'chat_module')
     key_lingju_api_key = system_config.get('key', 'lingju_api_key')
     key_lingju_api_authcode = system_config.get('key', 'lingju_api_authcode')
@@ -82,10 +82,11 @@ def load_config():
     proxy_config = system_config.get('key', 'proxy_config')
     is_proxy = system_config.get('key', 'is_proxy')
     ltp_mode = system_config.get('key', 'ltp_mode')
-    key_fast_gpt_key = system_config.get('key', 'fast_gpt_key')
     key_xingchen_api_key = system_config.get('key', 'xingchen_api_key')
     xingchen_characterid = system_config.get('key', 'xingchen_characterid')
     gpt_base_url = system_config.get('key', 'gpt_base_url')
+    ollama_ip = system_config.get('key', 'ollama_ip')
+    ollama_model = system_config.get('key', 'ollama_model')
     config = json.load(codecs.open('config.json', encoding='utf-8'))
 
 def save_config(config_data):
