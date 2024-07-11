@@ -20,12 +20,11 @@ def question(cont):
        
     session = requests.Session()
     session.verify = False
-    if httpproxy != None:
+    if httpproxy != None and httpproxy != '':
             session.proxies = {
                 "https": "https://" + httpproxy,
                 "http": "http://" + httpproxy
             }
-
 
     model_engine = cfg.gpt_model_engine
     #此处可以定义角色的行为和特征，假装xx模型可以绕过chatgpt信息检查
@@ -71,7 +70,6 @@ def question(cont):
         response = session.post(url, json=data, headers=headers, verify=False)
         response.raise_for_status()  # 检查响应状态码是否为200
         result = json.loads(response.text)
-        print(result)
         response_text = result["choices"][0]["message"]["content"]
     except requests.exceptions.RequestException as e:
         print(f"请求失败: {e}")
