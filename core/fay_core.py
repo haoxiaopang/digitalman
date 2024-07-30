@@ -1,5 +1,4 @@
 import difflib
-import imp
 import math
 import os
 import random
