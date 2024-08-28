@@ -186,37 +186,56 @@
                 <div class="right">
                     <div class="right_main">
                         <div class="container">
-                     <div class="content">
-
-                       <div v-for="(item, index) in msg_list" :key="index">
-                        
-                       <div class="item item-center"><span>[[item.timetext]]</span></div>
-                     
-                        <div class="item item-left" v-if="item.type == 'fay'">
-                        <div class="avatar"><img src="{{ url_for('static',filename='to.jpg') }}" />
-                        </div>
-                        <div class="bubble bubble-left">[[item.content]]
-                        </div>
-                        </div>
-                        
-                        
-                        <div class="item item-right" v-else>
-                        <div class="bubble bubble-right" >[[item.content]]<div v-if="loading && index === msg_list.length - 1" class="spinner"></div></div>
-                        <div class="avatar"><img src="{{ url_for('static',filename='from.jpg') }}" />
-                        </div>
-                        </div>
-                        </div>
-                        <div>
-                       
-                        </div>
-                       
-                        
-                        </div>
+                            <div class="filter">
+                                <el-select  v-model="selectedUser" placeholder="对话筛选" @change="handleUserChange">
+                                    <el-option label="全员" value="all"></el-option>
+                                    <el-option v-for="user in member_list" :key="user[0]" :label="user[1]" :value="user[0]"></el-option>
+                                </el-select>
+                            </div>
+                            <div class="content">
+                            <div>
                                 
+
+                            </div>
+                                <div v-for="(item, index) in msg_list" :key="index">
+                                    <div class="item item-center"><span>[[item.timetext]]</span></div>
+                                
+                                    <div class="item item-left" v-if="item.type == 'fay'">
+                                        <div class="avatar"><img src="{{ url_for('static',filename='to.jpg') }}" /></div>
+                                        <div class="bubble-container">
+                                            <div class="bubble bubble-left">[[item.content]]</div>
+                                        </div>
+                                    </div>
+                                
+                                    <div class="item item-right" v-else>
+                                        <div class="bubble-container">
+                                            <div class="username">[[ item.username ]]</div>
+                                            <div class="bubble bubble-right">[[item.content]]
+                                                <div v-if="loading && index === msg_list.length - 1" class="spinner"></div>
+                                            </div>
+                                        </div>
+                                        <div class="avatar"><img src="{{ url_for('static',filename='from.jpg') }}" /></div>
+                                    </div>
+                                </div>
+
+                                 <div>
+                                
+                                 </div>
+                                
+                                 
+                                 </div>
+                                        
                             <div class="input-area">
                                 <textarea v-model="send_msg" name="text" id="textarea" placeholder="发送些内容给Fay..."></textarea>
                                 <div class="button-area">
-                                    <button id="send-btn" @click="send()">Fay</button>                                    
+                                    <el-select style="width: 125px;"  v-model="sendUser" placeholder="对话用户选择" >
+                                        <el-option label="默认用户" value="User"></el-option>
+                                        <el-option v-for="user in member_list" :key="user[0]" :label="user[1]" :value="user[0]" v-if="user[1]!='User'"></el-option>
+                                        <el-option label="自定义" value="others"></el-option>
+                                    </el-select>
+                                    <el-input v-show="sendUser === 'others'" v-model="othersUser" placeholder="输入用户名" style="width: 120px; margin-left: 20px;"></el-input>
+
+                                    <button style="margin-left: 20px;" id="send-btn" @click="send()">Fay</button>                                    
                                 </div>
                             </div>
                         </div>

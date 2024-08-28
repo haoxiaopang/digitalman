@@ -4,6 +4,7 @@ import time
 import pygame
 
 import thread_manager
+import wave
 
 def get_stream():
         paudio = pyaudio.PyAudio()
@@ -35,10 +36,13 @@ def receive_audio(client):
                     break
             print("receive audio end:{}".format(len(filedata)), end="")
 
-            filename = "sample/recv_{}.mp3".format(time.time())
-            with open(filename, "wb") as f:
-                f.write(filedata)
-                f.close()
+            filename = "sample/recv_{}.wav".format(time.time())
+            with wave.open(filename, 'wb') as wf:
+                        wf.setnchannels(1)
+                        wf.setsampwidth(2)
+                        wf.setframerate(16000)
+                        wf.writeframes(filedata)
+
             pygame.mixer.music.load(filename)
             pygame.mixer.music.play()
 
@@ -47,7 +51,9 @@ def receive_audio(client):
 
 if __name__ == "__main__":
     client = socket.socket()
-    client.connect(("192.168.1.101", 10001))
+    client.connect(("127.0.0.1", 10001))
+    client.send(b"<username>user1</username>")
+    time.sleep(1)
     pygame.mixer.init()
     thread_manager.MyThread(target=send_audio, args=(client,)).start()
     thread_manager.MyThread(target=receive_audio, args=(client,)).start()

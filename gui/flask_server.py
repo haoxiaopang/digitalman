@@ -16,10 +16,27 @@ from core import wsa_server
 from core import fay_core
 from core import content_db
 from ai_module import yolov8
+from core import member_db
+from flask_httpauth import HTTPBasicAuth
 
 
 __app = Flask(__name__)
+auth = HTTPBasicAuth()
 CORS(__app, supports_credentials=True)
+
+def load_users():
+    with open('users.json') as f:
+        users = json.load(f)
+    return users
+
+users = load_users()
+
+@auth.verify_password
+def verify_password(username, password):
+    if not users or config_util.start_mode == 'common':
+        return True
+    if username in users and users[username] == password:
+        return username
 
 
 def __get_template():
@@ -27,14 +44,17 @@ def __get_template():
 
 
 def __get_device_list():
-    audio = pyaudio.PyAudio()
-    device_list = []
-    for i in range(audio.get_device_count()):
-        devInfo = audio.get_device_info_by_index(i)
-        if devInfo['hostApi'] == 0:
-            device_list.append(devInfo["name"])
-    
-    return list(set(device_list))
+    if config_util.start_mode == 'common':
+        audio = pyaudio.PyAudio()
+        device_list = []
+        for i in range(audio.get_device_count()):
+            devInfo = audio.get_device_info_by_index(i)
+            if devInfo['hostApi'] == 0:
+                device_list.append(devInfo["name"])
+        
+        return list(set(device_list))
+    else:
+        return []
 
 
 @__app.route('/api/submit', methods=['post'])
@@ -176,6 +196,8 @@ def api_get_data():
             "voiceList": send_voice_list
         })
     wsa_server.get_web_instance().add_cmd({"deviceList": __get_device_list()})
+    if fay_booter.booter_running:
+        wsa_server.get_web_instance().add_cmd({"liveState": 1})
     return json.dumps({'config': config_util.config})
 
 
@@ -200,17 +222,22 @@ def api_stop_live():
 def api_send():
     data = request.values.get('data')
     info = json.loads(data)
-    fay_core.send_for_answer(info['msg'])
+    fay_core.send_for_answer(info['msg'], info['username'])
     return '{"result":"successful"}'
 
 @__app.route('/api/get-msg', methods=['post'])
 def api_get_Msg():
+    data = request.form.get('data')
+    data = json.loads(data)
     contentdb = content_db.new_instance()
-    list = contentdb.get_list('all','desc',1000)
+    if data["uid"] == "all":
+        list = contentdb.get_list('all','desc',1000)
+    else:
+        list = contentdb.get_list('all','desc',1000, data["uid"])
     relist = []
     i = len(list)-1
     while i >= 0:
-        relist.append(dict(type=list[i][0], way=list[i][1], content=list[i][2], createtime=list[i][3], timetext=list[i][4]))
+        relist.append(dict(type=list[i][0], way=list[i][1], content=list[i][2], createtime=list[i][3], timetext=list[i][4], username=list[i][5]))
         i -= 1
 
     return json.dumps({'list': relist})
@@ -222,17 +249,28 @@ def api_send_v1_chat_completions():
     last_content = ""
     if 'messages' in data and data['messages']:
         last_message = data['messages'][-1]  
+        username = last_message.get('role', 'User')  
+        if username == 'user':
+            username = 'User'
         last_content = last_message.get('content', 'No content provided')  
     else:
         last_content = 'No messages found'
-    
+        username = 'User'
+
     model = data.get('model', 'fay')
-    text = fay_core.send_for_answer(last_content)
+    text = fay_core.send_for_answer(last_content, username)
 
     if model == 'fay-streaming':
         return stream_response(text)
     else:
         return non_streaming_response(last_content, text)
+
+@__app.route('/api/get-member-list', methods=['post'])
+def api_get_Member_list():
+    memberdb = member_db.new_instance()
+    list = memberdb.get_all_users()
+    return json.dumps({'list': list})
+
 
 def stream_response(text):
     def generate():
@@ -289,11 +327,13 @@ def text_chunks(text, chunk_size=20):
         yield text[i:i + chunk_size]
 
 @__app.route('/', methods=['get'])
+@auth.login_required
 def home_get():
     return __get_template()
 
 
 @__app.route('/', methods=['post'])
+@auth.login_required
 def home_post():
     return __get_template()
 
