@@ -1,5 +1,5 @@
 import time
-
+import asyncio
 import azure.cognitiveservices.speech as speechsdk
 import asyncio
 from tts import tts_voice
@@ -9,14 +9,19 @@ from utils import config_util as cfg
 import pygame
 import edge_tts
 from pydub import AudioSegment
+from scheduler.thread_manager import MyThread
 
 class Speech:
     def __init__(self):
         self.ms_tts = False
+        voice_type = tts_voice.get_voice_of(config_util.config["attribute"]["voice"])
+        voice_name = EnumVoice.XIAO_XIAO.value["voiceName"]
+        if voice_type is not None:
+            voice_name = voice_type.value["voiceName"]
         if config_util.key_ms_tts_key and config_util.key_ms_tts_key is not None and config_util.key_ms_tts_key.strip() != "":
             self.__speech_config = speechsdk.SpeechConfig(subscription=cfg.key_ms_tts_key, region=cfg.key_ms_tts_region)
             self.__speech_config.speech_recognition_language = "zh-CN"
-            self.__speech_config.speech_synthesis_voice_name = "zh-CN-XiaoxiaoNeural"
+            self.__speech_config.speech_synthesis_voice_name = voice_name
             self.__speech_config.set_speech_synthesis_output_format(speechsdk.SpeechSynthesisOutputFormat.Riff16Khz16BitMonoPcm)
             self.__synthesizer = speechsdk.SpeechSynthesizer(speech_config=self.__speech_config, audio_config=None)
             self.ms_tts = True
@@ -77,13 +82,12 @@ class Speech:
                    '</mstts:express-as>' \
                    '</voice>' \
                    '</speak>'.format(voice_name, style, 1.8, "<break time='0.2s'/>" + text)
-            result = self.__synthesizer.speak_ssml(ssml)
+            result = self.__synthesizer.speak_text_async(text).get()
+            # result = self.__synthesizer.speak_ssml(ssml)#感觉使用sepak_text_async要快很多
             audio_data_stream = speechsdk.AudioDataStream(result)
-
             file_url = './samples/sample-' + str(int(time.time() * 1000)) + '.wav'
             audio_data_stream.save_to_wav_file(file_url)
             if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-                # wav_url = self.convert_mp3_to_wav(file_url)
                 wav_url = file_url
                 self.__history_data.append((voice_name, style, text, wav_url))
                 return wav_url
