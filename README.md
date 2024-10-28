@@ -1,29 +1,46 @@
-[`English`](https://github.com/xszyou/Fay/blob/main/README_EN.md) 
 
 <div align="center">
     <br>
     <img src="readme/icon.png" alt="Fay">
     <h1>FAY</h1>
-	<h3>Fay数字人框架 助理版 </h3>
+	<h3>Fay数字人框架</h3>
 </div>
 
+！！重要通知：我们会在2024年12月31日前把Fay的三个版本合并成1个，并致力提供更稳定更全面的功能。
+
+我们致力于思考面向终端的数字人落地应用，并通过完整代码把思考结果呈现给大家。Fay数字人框架，向上适配各种数字人模型技术，向下接入各式大语言模型，并且便于更换诸如TTS、ASR等模型，为单片机、app、网站提供全面的数字人应用接口。      
 
 
-助理版是Fay 数字人框架最常用的版本。它提供了灵活的模块化设计，使开发人员能够定制和组合各种功能模块，包括情绪分析、NLP处理、语音合成和语音输出等。助理版构建的是一问（远程或本地，移动或PC，语音或文字）一答（数字人或机器，移动或PC，语音或文字或RPA）的标准模式。<span style="color:red;">助理版提供了更完善的接口，可以方便您把自己的产品接入数字人</span>
+
+## **功能特点**
 
 
 
-如果你需要是一个线上线下的销售员，请移步[`带货完整版`](https://github.com/xszyou/Fay/tree/fay-sales-edition)  
+- 完全开源，商用免责
+- 支持全离线使用
+- 支持毫秒级回复
+- 自由匹配数字人模型、大语言模型、ASR、TTS模型
+- 支持数字人自动播报模式（虚拟教师、虚拟主播、新闻播报）
+- 支持任意终端使用：单片机、app、网站、大屏、成熟系统接入等
+- 支持多用户多路并发
+- 提供文字沟通接口、声音沟通接口、数字人模型接口、管理控制接口、自动播放接口
+- 支持语音指令灵活配置执行
+- 支持自定义知识库、自定义问答对、自定义人设信息
+- 支持唤醒及打断对话
+- 支持服务器及单机模式
+- 支持机器人表情输出
 
-如果你需要是一个可以自主决策、主动联系主人的agent，请移步[`agent版`](https://github.com/xszyou/Fay/tree/fay-agent-edition)                      
+###               
 
-## **Fay数字人助理版**
+## **Fay数字人框架**
 
-
+![](readme/chat.png)
 
 ![](readme/controller.png)
 
-https://github.com/TheRamU/Fay/blob/main/WebSocket.md)
+
+
+
 
 
 ## **源码启动**
@@ -40,7 +57,7 @@ pip install -r requirements.txt
 ```
 
 ### **配置**
-+ 修改 `./system.conf` 文件
++ 依照说明修改 `./system.conf` 文件
 
 ### **启动**
 启动Fay控制器
@@ -48,9 +65,12 @@ pip install -r requirements.txt
 python main.py
 ```
 
-## **docker 启动**
+
+
+## **或docker 启动**
+
 1. 下载助理版
-https://github.com/xszyou/Fay/tree/fay-assistant-edition
+https://github.com/xszyou/Fay
 2.  修改 `./system.conf` 文件
 3. 删除requirements.txt下pyqt5~=5.15.6
 
@@ -62,7 +82,15 @@ run
 ```shell
 docker run -it --rm -p 5000:5000 -p 10001:10001 -p 10002:10002 -p 10003:10003 fay
 ```
-### **启动数字人（非必须）**
+
+
+## **高级玩法**
+
+![](readme/interface.png)
+
+
+
+### ***使用数字人（非必须）***
 
 ue: https://github.com/xszyou/fay-ue5
 
@@ -70,12 +98,13 @@ unity：https://qqk9ntwbcit.feishu.cn/wiki/Se9xw04hUiss00kb2Lmci1BVnM9
 
 metahuman-stream（2d）：https://qqk9ntwbcit.feishu.cn/wiki/Ik1kwO9X5iilnGkFwRhcnmtvn3e
 
-duix（android)：https://qqk9ntwbcit.feishu.cn/wiki/Ik1kwO9X5iilnGkFwRhcnmtvn3e
+duix（android)：https://qqk9ntwbcit.feishu.cn/wiki/Ik1kwO9X5iilnGkFwRhcnmtvn3e()
 
-### **启动android 连接器（非必须）**
-代码地址：https://github.com/xszyou/fay-android
+aibote(windows cpu克隆人)：[‬‍‬‍⁠﻿‍‍‍‌﻿﻿https://qqk9ntwbcit.feishu.cn/wiki/ULaywzVRti0HXWkhCzacoSPAnIg
 
-### **集成到自家产品（非必须）**
+
+
+### ***集成到自家产品（非必须）***
 接口：https://qqk9ntwbcit.feishu.cn/wiki/Mcw3wbA3RiNZzwkexz6cnKCsnhh
 
 

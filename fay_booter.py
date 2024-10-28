@@ -5,16 +5,17 @@ import pyaudio
 import socket
 import psutil
 import sys
+import requests
 from core.interact import Interact
 from core.recorder import Recorder
-from core.fay_core import FeiFei
+from core import fay_core
 from scheduler.thread_manager import MyThread
 from utils import util, config_util, stream_util
 from core.wsa_server import MyServer
 from scheduler.thread_manager import MyThread
 from core import wsa_server
 
-feiFei: FeiFei = None
+feiFei: fay_core.FeiFei = None
 recorderListener: Recorder = None
 __running = False
 deviceSocketServer = None
@@ -34,6 +35,8 @@ class RecorderListener(Recorder):
         self.__FORMAT = pyaudio.paInt16
         self.__running = False
         self.username = 'User'
+        self.channels = 1
+        self.sample_rate = 16000
 
         super().__init__(fei)
 
@@ -44,32 +47,47 @@ class RecorderListener(Recorder):
             feiFei.on_interact(interact)
 
     def get_stream(self):
-        self.paudio = pyaudio.PyAudio()
-        device_id = 0
-        self.stream = self.paudio.open(input_device_index=device_id, rate=self.__RATE, format=self.__FORMAT, channels=1, input=True)
-        self.__running = True
-        MyThread(target=self.__pyaudio_clear).start()
+        try:
+            self.paudio = pyaudio.PyAudio()
+            device_id = 0  # 或者根据需要选择其他设备
+
+            # 获取设备信息
+            device_info = self.paudio.get_device_info_by_index(device_id)
+            self.channels = device_info.get('maxInputChannels', 1) #很多麦克风只支持单声道录音
+            # self.sample_rate = int(device_info.get('defaultSampleRate', self.__RATE))
+            print(self.sample_rate)
+
+            # 设置格式（这里以16位深度为例）
+            format = pyaudio.paInt16
+
+            # 打开音频流，使用设备的最大声道数和默认采样率
+            self.stream = self.paudio.open(
+                input_device_index=device_id,
+                rate=self.sample_rate,
+                format=format,
+                channels=self.channels,
+                input=True,
+                frames_per_buffer=4096
+            )
+
+            self.__running = True
+            MyThread(target=self.__pyaudio_clear).start()
+        except Exception as e:
+            print(f"Error: {e}")
+            time.sleep(10)
         return self.stream
+
 
     def __pyaudio_clear(self):
         while self.__running:
             time.sleep(30)
-            
-
-    def __findInternalRecordingDevice(self, p):
-        for i in range(p.get_device_count()):
-            devInfo = p.get_device_info_by_index(i)
-            if devInfo['name'].find(self.__device) >= 0 and devInfo['hostApi'] == 0:
-                config_util.config['source']['record']['channels'] = devInfo['maxInputChannels']
-                config_util.save_config(config_util.config)
-                return i, devInfo
-        util.log(1, '[!] 无法找到内录设备!')
-        return -1, None
     
     def stop(self):
         super().stop()
         self.__running = False
         try:
+            while self.is_reading:
+                time.sleep(0.1)
             self.stream.stop_stream()
             self.stream.close()
             self.paudio.terminate()
@@ -157,7 +175,8 @@ def device_socket_keep_alive():
         for key, value in DeviceInputListenerDict.items():
             try:
                 value.deviceConnector.send(b'\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8')#发送心跳包
-                wsa_server.get_web_instance().add_cmd({"remote_audio_connect": True, "Username" : value.username}) 
+                if wsa_server.get_web_instance().is_connected(value.username):
+                    wsa_server.get_web_instance().add_cmd({"remote_audio_connect": True, "Username" : value.username}) 
             except Exception as serr:
                 util.printInfo(3, value.username, "远程音频输入输出设备已经断开：{}".format(key))
                 value.stop()
@@ -165,9 +184,8 @@ def device_socket_keep_alive():
                 break
         if delkey:
              value =  DeviceInputListenerDict.pop(delkey)
-             wsa_server.get_web_instance().add_cmd({"remote_audio_connect": False, "Username" : value.username})
-        if len(DeviceInputListenerDict.items()) == 0:
-            wsa_server.get_web_instance().add_cmd({"remote_audio_connect": False})
+             if wsa_server.get_web_instance().is_connected(value.username):
+                wsa_server.get_web_instance().add_cmd({"remote_audio_connect": False, "Username" : value.username})
         time.sleep(1)
 
 #远程音频连接
@@ -203,7 +221,46 @@ def kill_process_by_port(port):
                     proc.wait()
         except(psutil.NosuchProcess, psutil.AccessDenied):
             pass
-
+#数字人端请求获取最新的自动播放消息，若自动播放服务关闭会自动退出自动播放
+def start_auto_play_service():
+    url = f"{config_util.config['source']['automatic_player_url']}/get_auto_play_item"
+    user = "User" #TODO 临时固死了
+    is_auto_server_error = False
+    while __running:
+        if config_util.config['source']['wake_word_enabled'] and config_util.config['source']['wake_word_type'] == 'common' and recorderListener.wakeup_matched == True:
+            time.sleep(0.01)
+            continue
+        if is_auto_server_error:
+            util.printInfo(1, user, '60s后重连自动播放服务器')
+            time.sleep(60)
+        # 请求自动播放服务器
+        with fay_core.auto_play_lock:
+            if config_util.config['source']['automatic_player_status'] and config_util.config['source']['automatic_player_url'] is not None and fay_core.can_auto_play == True and (config_util.config["interact"]["playSound"] or wsa_server.get_instance().is_connected(user)):
+                fay_core.can_auto_play = False
+                post_data = {"user": user}
+                try:
+                    response = requests.post(url, json=post_data, timeout=5)
+                    if response.status_code == 200:
+                        is_auto_server_error = False
+                        data = response.json()
+                        audio_url = data.get('audio')
+                        if not audio_url or audio_url.strip()[0:4] != "http":
+                            audio_url = None   
+                        response_text = data.get('text')
+                        timestamp = data.get('timestamp')
+                        interact = Interact("auto_play", 2, {'user': user, 'text': response_text, 'audio': audio_url})
+                        util.printInfo(1, user, '自动播放：{}，{}'.format(response_text, audio_url), time.time())
+                        feiFei.on_interact(interact)
+                    else:
+                        is_auto_server_error = True
+                        fay_core.can_auto_play = True
+                        util.printInfo(1, user, '请求自动播放服务器失败，错误代码是：{}'.format(response.status_code))
+                except requests.exceptions.RequestException as e:
+                    is_auto_server_error = True
+                    fay_core.can_auto_play = True
+                    util.printInfo(1, user, '请求自动播放服务器失败，错误信息是：{}'.format(e))
+        time.sleep(0.01)
+     
 #控制台输入监听
 def console_listener():
     global feiFei
@@ -239,7 +296,6 @@ def console_listener():
                 util.log(1, '错误的参数！')
             msg = text[3:len(text)]
             util.printInfo(3, "控制台", '{}: {}'.format('控制台', msg))
-            feiFei.last_quest_time = time.time()
             interact = Interact("console", 1, {'user': 'User', 'msg': msg})
             thr = MyThread(target=feiFei.on_interact, args=[interact])
             thr.start()
@@ -294,7 +350,7 @@ def start():
 
     #开启核心服务
     util.log(1, '开启核心服务...')
-    feiFei = FeiFei()
+    feiFei = fay_core.FeiFei()
     feiFei.start()
 
     #加载本地知识库
@@ -312,22 +368,26 @@ def start():
         recorderListener = RecorderListener(record['device'], feiFei)  # 监听麦克风
         recorderListener.start()
 
-    #启动远程音频连接服务
-    util.log(1,'启动远程音频连接服务...')
+    #启动声音沟通接口服务
+    util.log(1,'启动声音沟通接口服务...')
     deviceSocketThread = MyThread(target=accept_audio_device_output_connect)
     deviceSocketThread.start()
+
+    #启动自动播放服务
+    util.log(1,'启动自动播放服务...')
+    MyThread(target=start_auto_play_service).start()
             
     #监听控制台
     util.log(1, '注册命令...')
     MyThread(target=console_listener).start()  # 监听控制台
 
-    util.log(1, '完成!')
+    util.log(1, '服务启动完成!')
     util.log(1, '使用 \'help\' 获取帮助.')
 
     
 
 if __name__ == '__main__':
     ws_server: MyServer = None
-    feiFei: FeiFei = None
+    feiFei: fay_core.FeiFei = None
     recorderListener: Recorder = None
     start()

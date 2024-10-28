@@ -21,6 +21,8 @@ class MyServer:
         self.__running = True
         self.__pending = None
         self.isConnect = False
+        self.TIMEOUT = 3  # 设置任何超时时间为 3 秒
+        self.__tasks = {}  # 记录任务和开始时间的字典
 
     # 接收处理
     async def __consumer_handler(self, websocket, path):
@@ -28,7 +30,10 @@ class MyServer:
         try:
             async for message in websocket:
                 await asyncio.sleep(0.01)
-                username = json.loads(message).get("Username")
+                try:
+                    username = json.loads(message).get("Username")
+                except json.JSONDecodeError as e:#json格式有误，不处理
+                    pass
                 if username:
                     remote_address = websocket.remote_address
                     unique_id = f"{remote_address[0]}:{remote_address[1]}"
@@ -42,7 +47,7 @@ class MyServer:
             await self.remove_client(websocket)
             util.printInfo(1, "User" if  username is None else username, f"WebSocket 连接关闭: {e}")
 
-    #发送处理        
+    # 发送处理        
     async def __producer_handler(self, websocket, path):
         while self.__running:
             await asyncio.sleep(0.01)
@@ -54,23 +59,35 @@ class MyServer:
                         # 群发消息
                         async with self.lock:
                             wsclients = [c["websocket"] for c in self.__clients]
-                        tasks = [self.send_message(client, message, username) for client in wsclients]
+                        tasks = [self.send_message_with_timeout(client, message, username, timeout=3) for client in wsclients]
                         await asyncio.gather(*tasks)
                     else:
                         # 向指定用户发送消息
                         async with self.lock:
                             target_clients = [c["websocket"] for c in self.__clients if c.get("username") == username]
-                        tasks = [self.send_message(client, message, username) for client in target_clients]
+                        tasks = [self.send_message_with_timeout(client, message, username, timeout=3) for client in target_clients]
                         await asyncio.gather(*tasks)
 
-    #发送消息
+    # 发送消息（设置超时）
+    async def send_message_with_timeout(self, client, message, username, timeout=3):
+        try:
+            await asyncio.wait_for(self.send_message(client, message, username), timeout=timeout)
+        except asyncio.TimeoutError:
+            util.printInfo(1, "User" if username is None else username, f"发送消息超时: 用户名 {username}")
+        except websockets.exceptions.ConnectionClosed as e:
+            # 从客户端列表中移除已断开的连接
+            await self.remove_client(client)
+            util.printInfo(1, "User" if username is None else username, f"WebSocket 连接关闭: {e}")
+
+    # 发送消息
     async def send_message(self, client, message, username):
         try:
             await client.send(message)
         except websockets.exceptions.ConnectionClosed as e:
             # 从客户端列表中移除已断开的连接
             await self.remove_client(client)
-            util.printInfo(1, "User" if  username is None else username, f"WebSocket 连接关闭: {e}")
+            util.printInfo(1, "User" if username is None else username, f"WebSocket 连接关闭: {e}")
+
                 
     async def __handler(self, websocket, path):
         self.isConnect = True
@@ -111,6 +128,16 @@ class MyServer:
             if len(self.__clients) == 0:
                 self.isConnect = False
         self.on_close_handler()
+
+    def is_connected(self, username):
+        if username is None:
+            username = "User"
+        if len(self.__clients) == 0:
+            return False
+        clients = [c for c in self.__clients if c["username"] == username]
+        if len(clients) > 0:
+            return True
+        return False
 
 
     #Edit by xszyou on 20230113:通过继承此类来实现服务端的接收后处理逻辑

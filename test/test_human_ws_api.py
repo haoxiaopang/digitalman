@@ -36,19 +36,7 @@ def process_audio_queue():
         if not audio_queue.empty():
             audio_url = audio_queue.get()
             play_audio(audio_url)
-        elif config["enable_auto_get"]:
-            # 当队列为空时，如果配置主动获取播放项，发起请求
-            try:
-              post_data = {"user": "User"}
-              response = requests.post(f"http://{config['url']}:5000/get_auto_play_item", json=post_data)
-              if response.status_code == 200:
-                  print("[Info] POST request sent successfully.")
-              else:
-                  config["enable_auto_get"] = False
-                  print(f"[Error] Failed to send POST request. Status code: {response.status_code}")
-            except requests.exceptions.RequestException as e:
-              config["enable_auto_get"] = False
-              print(f"[Error] Request failed: {e}. Auto-get disabled.")
+         
 
 def play_audio(url):
     global player
@@ -66,7 +54,7 @@ def wait_for_audio_end():
         state = player.get_state()
         if state == vlc.State.Ended:
             break
-        time.sleep(0.1)
+        time.sleep(0.01)
     # 播放结束后处理队列
     process_audio_queue()
 

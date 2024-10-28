@@ -1,9 +1,10 @@
 from threading import Thread
-
+from threading import Lock
 import websocket
 import json
 import time
 import ssl
+import wave
 import _thread as thread
 from aliyunsdkcore.client import AcsClient
 from aliyunsdkcore.request import CommonRequest
@@ -56,14 +57,16 @@ class ALiNls:
     def __init__(self, username):
         self.__URL = 'wss://nls-gateway-cn-shenzhen.aliyuncs.com/ws/v1'
         self.__ws = None
-        self.__connected = False
         self.__frames = []
-        self.__state = 0
         self.__closing = False
         self.__task_id = ''
         self.done = False
         self.finalResults = ""
         self.username = username
+        self.data = b''
+        self.__endding = False
+        self.__is_close = False
+        self.lock = Lock()
 
     def __create_header(self, name):
         if name == 'StartTranscription':
@@ -86,62 +89,67 @@ class ALiNls:
             if name == 'SentenceEnd':
                 self.done = True
                 self.finalResults = data['payload']['result']
-                wsa_server.get_web_instance().add_cmd({"panelMsg": self.finalResults, "Username" : self.username})
-                if not cfg.config["interact"]["playSound"]: # 非展板播放
+                if wsa_server.get_web_instance().is_connected(self.username):
+                    wsa_server.get_web_instance().add_cmd({"panelMsg": self.finalResults, "Username" : self.username})
+                if wsa_server.get_instance().is_connected(self.username):
                     content = {'Topic': 'Unreal', 'Data': {'Key': 'log', 'Value': self.finalResults}, 'Username' : self.username}
                     wsa_server.get_instance().add_cmd(content)
                 ws.close()#TODO
             elif name == 'TranscriptionResultChanged':
                 self.finalResults = data['payload']['result']
-                wsa_server.get_web_instance().add_cmd({"panelMsg": self.finalResults, "Username" : self.username})
-                if not cfg.config["interact"]["playSound"]: # 非展板播放
+                if wsa_server.get_web_instance().is_connected(self.username):
+                    wsa_server.get_web_instance().add_cmd({"panelMsg": self.finalResults, "Username" : self.username})
+                if wsa_server.get_instance().is_connected(self.username):
                     content = {'Topic': 'Unreal', 'Data': {'Key': 'log', 'Value': self.finalResults}, 'Username' : self.username}
                     wsa_server.get_instance().add_cmd(content)
 
         except Exception as e:
             print(e)
         # print("### message:", message)
-        if self.__closing:
-            try:
-                self.__ws.close()
-            except Exception as e:
-                print(e)
 
     # 收到websocket的关闭要求
     def on_close(self, ws, code, msg):
-        self.__connected = False
-        # print("### CLOSE:", msg)
+        self.__endding = True
+        self.__is_close = True
+        if msg:
+            print("aliyun asr服务不太稳定:", msg)
 
     # 收到websocket错误的处理
     def on_error(self, ws, error):
-        print("### error:", error)
+        print("aliyun asr error:", error)
 
     # 收到websocket连接建立的处理
     def on_open(self, ws):
-        self.__connected = True
+        self.__endding = False
         #为了兼容多路asr，关闭过程数据
         def run(*args):
-            while self.__connected:
-                try:
+            while self.__endding == False:
+                try: 
                     if len(self.__frames) > 0:
-                        frame = self.__frames[0]
-
-                        self.__frames.pop(0)
-                        if type(frame) == dict:
+                        with self.lock:
+                            frame = self.__frames.pop(0)
+                        if isinstance(frame, dict):
                             ws.send(json.dumps(frame))
-                        elif type(frame) == bytes:
+                        elif isinstance(frame, bytes):
                             ws.send(frame, websocket.ABNF.OPCODE_BINARY)
-                        #print('发送 ------> ' + str(type(frame)))
+                            self.data += frame
+                    else:
+                        time.sleep(0.001)  # 避免忙等
                 except Exception as e:
                     print(e)
-                time.sleep(0.0001)
-
+                    break
+            if self.__is_close == False:
+                for frame in self.__frames:
+                    ws.send(frame, websocket.ABNF.OPCODE_BINARY)
+                frame = {"header": self.__create_header('StopTranscription')}
+                ws.send(json.dumps(frame))
         thread.start_new_thread(run, ())
 
     def __connect(self):
         self.finalResults = ""
         self.done = False
-        self.__frames.clear()
+        with self.lock:
+            self.__frames.clear()
         self.__ws = websocket.WebSocketApp(self.__URL + '?token=' + _token, on_message=self.on_message)
         self.__ws.on_open = self.on_open
         self.__ws.on_error = self.on_error
@@ -149,7 +157,8 @@ class ALiNls:
         self.__ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE})
 
     def send(self, buf):
-        self.__frames.append(buf)
+        with self.lock:
+            self.__frames.append(buf)
 
     def start(self):
         Thread(target=self.__connect, args=[]).start()
@@ -167,19 +176,13 @@ class ALiNls:
         self.send(data)
 
     def end(self):
-        if self.__connected:
-            try:
-                for frame in self.__frames:
-                    self.__frames.pop(0)
-                    if type(frame) == dict:
-                        self.__ws.send(json.dumps(frame))
-                    elif type(frame) == bytes:
-                        self.__ws.send(frame, websocket.ABNF.OPCODE_BINARY)
-                    time.sleep(0.0001)
-                self.__frames.clear()
-                frame = {"header": self.__create_header('StopTranscription')}
-                self.__ws.send(json.dumps(frame))
-            except Exception as e:
-                print(e)
-        self.__closing = True
-        self.__connected = False
+        self.__endding = True
+        with wave.open('cache_data/input2.wav', 'wb') as wf:
+            # 设置音频参数
+            n_channels = 1  # 单声道
+            sampwidth = 2   # 16 位音频，每个采样点 2 字节
+            wf.setnchannels(n_channels)
+            wf.setsampwidth(sampwidth)
+            wf.setframerate(16000)
+            wf.writeframes(self.data)
+        self.data = b''

@@ -18,7 +18,6 @@ from core import wsa_server
 from core import fay_core
 from core import content_db
 from core.interact import Interact
-from ai_module import yolov8
 from core import member_db
 import fay_booter
 from flask_httpauth import HTTPBasicAuth
@@ -77,20 +76,9 @@ def api_submit():
 
     return '{"result":"successful"}'
 
-@__app.route('/api/control-eyes', methods=['post'])
-def control_eyes():
-    eyes = yolov8.new_instance()
-    if(not eyes.get_status()):
-       eyes.start()
-       util.log(1, "YOLO v8正在启动...")
-    else:
-       eyes.stop()
-       util.log(1, "YOLO v8正在关闭...")
-    return '{"result":"successful"}'
-
-
 @__app.route('/api/get-data', methods=['post'])
 def api_get_data():
+    config_util.load_config()
     voice_list = tts_voice.get_voice_list()
     send_voice_list = []
     if config_util.tts_module == 'ali':
@@ -196,7 +184,7 @@ def api_get_data():
     wsa_server.get_web_instance().add_cmd({"deviceList": __get_device_list()})
     if fay_booter.is_running():
         wsa_server.get_web_instance().add_cmd({"liveState": 1})
-    return json.dumps({'config': config_util.config})
+    return json.dumps({'config': config_util.config, 'voice_list' : send_voice_list})
 
 
 @__app.route('/api/start-live', methods=['post'])
@@ -241,7 +229,8 @@ def api_get_Msg():
     while i >= 0:
         relist.append(dict(type=list[i][0], way=list[i][1], content=list[i][2], createtime=list[i][3], timetext=list[i][4], username=list[i][5]))
         i -= 1
-    
+    if fay_booter.is_running():
+        wsa_server.get_web_instance().add_cmd({"liveState": 1})
     return json.dumps({'list': relist})
 
 @__app.route('/v1/chat/completions', methods=['post'])
@@ -341,45 +330,26 @@ def home_get():
 @__app.route('/', methods=['post'])
 @auth.login_required
 def home_post():
-    wsa_server.get_web_instance.add_cmd({"is_connect": wsa_server.get_instance().isConnect}) #同步数字人连接状态
+    wsa_server.get_web_instance.add_cmd({"is_connect": wsa_server.get_instance().isConnect}) #TODO 不应放这里，同步数字人连接状态
     return __get_template()
 
+@__app.route('/setting', methods=['get'])
+def setting():
+    return render_template('setting.html')
+
+
+
+#输出的音频http
 @__app.route('/audio/<filename>')
 def serve_audio(filename):
     audio_file = os.path.join(os.getcwd(), "samples", filename)
     return send_file(audio_file)
 
-#数字人端请求获取最新的自动播放消息
-@__app.route('/get_auto_play_item', methods=['POST'])
-def get_auto_play_item():
-    if config_util.config['source']['automatic_player_status']:
-        # 获取用户标识
-        data = request.json
-        user = data.get('user', 'User')
-
-        # 请求自动播放服务器
-        post_data = {"user": user}
-        try:
-            response = requests.post(f"{config_util.config['source']['automatic_player_url']}/get_auto_play_item", json=post_data, timeout=5)
-            if response.status_code == 200:
-                data = response.json()
-                audio_url = data.get('audio')
-                response_text = data.get('text')
-                timestamp = data.get('timestamp')
-                print("[Info] POST request sent successfully.")
-                interact = Interact("auto_play", 2, {'user': user, 'text': response_text, 'audio': audio_url})
-                util.printInfo(1, user, '自动播放：{}，{}'.format(response_text, audio_url), time.time())
-                fay_booter.feiFei.on_interact(interact)
-            else:
-                print(f"[Error] Failed to send POST request. Status code: {response.status_code}")
-                connected_to_auto_play_server = False
-        except requests.exceptions.RequestException as e:
-            print(f"[Error] POST request failed: {e}")
-            connected_to_auto_play_server = False
-
-    return jsonify({"msg": "success"})
-
-        
+#输出的表情git
+@__app.route('/robot/<filename>')
+def serve_gif(filename):
+    gif_file = os.path.join(os.getcwd(), "gui", "robot", filename)
+    return send_file(gif_file)
 
 def run():
     server = pywsgi.WSGIServer(('0.0.0.0',5000), __app)

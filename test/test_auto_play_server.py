@@ -14,10 +14,10 @@ def get_wav():
     user = data.get('user', 'User')
 
     # 模拟WAV文件的URL（这里假设是某个静态文件服务的URL）
-    wav_url = f"http://120.79.187.154:5000/audio/sample-1728976414587.wav"
+    wav_url = ""#f"http://120.79.187.154:5000/audio/sample-1729231423801.wav"
 
     # 模拟返回的文本
-    response_text = "今天天气晴朗，适合外出哦！你有什么计划吗？"
+    response_text = "今天天气晴朗，适合外出哦！你有什么计划吗？" + str(time.time())
 
     # 获取当前时间戳，单位为秒
     timestamp = int(time.time())

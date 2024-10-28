@@ -34,8 +34,9 @@ class FunASR:
         try:
             self.done = True
             self.finalResults = message
-            wsa_server.get_web_instance().add_cmd({"panelMsg": self.finalResults, "Username" : self.username})
-            if not cfg.config["interact"]["playSound"]: # 非展板播放
+            if wsa_server.get_web_instance().is_connected(self.username):
+                wsa_server.get_web_instance().add_cmd({"panelMsg": self.finalResults, "Username" : self.username})
+            if wsa_server.get_instance().is_connected(self.username):
                 content = {'Topic': 'Unreal', 'Data': {'Key': 'log', 'Value': self.finalResults}, 'Username' : self.username}
                 wsa_server.get_instance().add_cmd(content)
    
@@ -51,22 +52,20 @@ class FunASR:
     # 收到websocket错误的处理
     def on_close(self, ws, code, msg):
         self.__connected = False
-        util.printInfo(1, self.username, f"### CLOSE:{msg}")
+        # util.printInfo(1, self.username, f"### CLOSE:{msg}")
         self.__ws = None
-        self.__attempt_reconnect()
 
     # 收到websocket错误的处理
     def on_error(self, ws, error):
         self.__connected = False
-        util.printInfo(1, self.username, f"### error:{error}")
+        # util.printInfo(1, self.username, f"### error:{error}")
         self.__ws = None
-        self.__attempt_reconnect()
 
     #重连
     def __attempt_reconnect(self):
         if not self.__reconnecting:
             self.__reconnecting = True
-            util.log(1, "尝试重连funasr...")
+            # util.log(1, "尝试重连funasr...")
             while not self.__connected:
                 time.sleep(self.__reconnect_delay)
                 self.start()

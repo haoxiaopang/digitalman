@@ -14,11 +14,13 @@ from utils import config_util as cfg
 import numpy as np
 import tempfile
 import wave
+from core import fay_core
+from core import interact
 # 启动时间 (秒)
 _ATTACK = 0.2
 
 # 释放时间 (秒)
-_RELEASE = 0.2
+_RELEASE = 0.7
 
 
 class Recorder:
@@ -42,7 +44,8 @@ class Recorder:
         if cfg.config['source']['wake_word_enabled']:
             self.timer = threading.Timer(60, self.reset_wakeup_status)  # 60秒后执行reset_wakeup_status方法
         self.username = 'User' #默认用户，子类实现时会重写
-
+        self.channels = 1
+        self.sample_rate = 16000
 
     def asrclient(self):
         if self.ASRMode == "ali":
@@ -76,7 +79,9 @@ class Recorder:
         return (self.__get_history_average(number) / self.__MAX_LEVEL) * 1.05 + 0.02
 
     def reset_wakeup_status(self):
-        self.wakeup_matched = False        
+        self.wakeup_matched = False  
+        with fay_core.auto_play_lock:
+            fay_core.can_auto_play = True
 
     def __waitingResult(self, iat: asrclient, audio_data):
         self.processing = True
@@ -106,14 +111,28 @@ class Recorder:
                             if word in text:
                                     wake_up = True
                         if wake_up:
+                            util.printInfo(1, self.username, "唤醒成功！")
+                            if wsa_server.get_web_instance().is_connected(self.username):
+                                wsa_server.get_web_instance().add_cmd({"panelMsg": "唤醒成功！", "Username" : self.username , 'robot': f'http://{cfg.fay_url}:5000/robot/Listening.jpg'})
+                            if wsa_server.get_instance().is_connected(self.username):
+                                content = {'Topic': 'Unreal', 'Data': {'Key': 'log', 'Value': "唤醒成功！"}, 'Username' : self.username, 'robot': f'http://{cfg.fay_url}:5000/robot/Listening.jpg'}
+                                wsa_server.get_instance().add_cmd(content)
                             self.wakeup_matched = True  # 唤醒成功
-                            util.printInfo(3, self.username, "唤醒成功！")
-                            self.on_speaking(text)
+                            with fay_core.auto_play_lock:
+                                fay_core.can_auto_play = False
+                            #self.on_speaking(text)
+                            intt = interact.Interact("auto_play", 2, {'user': self.username, 'text': "在呢，你说？"})
+                            self.__fay.on_interact(intt)
                             self.processing = False
                             self.timer.cancel()  # 取消之前的计时器任务
+                            
                         else:
-                            util.printInfo(3, self.username, "[!] 待唤醒！")
-                            wsa_server.get_web_instance().add_cmd({"panelMsg": "", "Username" : self.username})
+                            util.printInfo(1, self.username, "[!] 待唤醒！")
+                            if wsa_server.get_web_instance().is_connected(self.username):
+                                wsa_server.get_web_instance().add_cmd({"panelMsg": "[!] 待唤醒！", "Username" : self.username , 'robot': f'http://{cfg.fay_url}:5000/robot/Normal.jpg'})
+                            if wsa_server.get_instance().is_connected(self.username):
+                                content = {'Topic': 'Unreal', 'Data': {'Key': 'log', 'Value': "[!] 待唤醒！"}, 'Username' : self.username, 'robot': f'http://{cfg.fay_url}:5000/robot/Normal.jpg'}
+                                wsa_server.get_instance().add_cmd(content)
                     else:
                         self.on_speaking(text)
                         self.processing = False
@@ -132,28 +151,39 @@ class Recorder:
                             wake_up = True
                             break
                     if wake_up:
-                        util.printInfo(3, self.username, "唤醒成功！")
+                        util.printInfo(1, self.username, "唤醒成功！")
+                        if wsa_server.get_web_instance().is_connected(self.username):
+                            wsa_server.get_web_instance().add_cmd({"panelMsg": "唤醒成功！", "Username" : self.username , 'robot': f'http://{cfg.fay_url}:5000/robot/Listening.jpg'})
+                        if wsa_server.get_instance().is_connected(self.username):
+                            content = {'Topic': 'Unreal', 'Data': {'Key': 'log', 'Value': "唤醒成功！"}, 'Username' : self.username, 'robot': f'http://{cfg.fay_url}:5000/robot/Listening.jpg'}
+                            wsa_server.get_instance().add_cmd(content)
                         #去除唤醒词后语句
-                        question = text[len(wake_up_word):].lstrip()
+                        question = text#[len(wake_up_word):].lstrip()
                         self.on_speaking(question)
                         self.processing = False
                     else:
-                        util.printInfo(3, self.username, "[!] 待唤醒！")
-                        wsa_server.get_web_instance().add_cmd({"panelMsg": "", 'Username' : self.username})
+                        util.printInfo(1, self.username, "[!] 待唤醒！")
+                        if wsa_server.get_web_instance().is_connected(self.username):
+                            wsa_server.get_web_instance().add_cmd({"panelMsg": "[!] 待唤醒！", "Username" : self.username , 'robot': f'http://{cfg.fay_url}:5000/robot/Normal.jpg'})
+                        if wsa_server.get_instance().is_connected(self.username):
+                            content = {'Topic': 'Unreal', 'Data': {'Key': 'log', 'Value': "[!] 待唤醒！"}, 'Username' : self.username, 'robot': f'http://{cfg.fay_url}:5000/robot/Normal.jpg'}
+                            wsa_server.get_instance().add_cmd(content)
 
             #非唤醒模式
             else:
                  self.on_speaking(text)
                  self.processing = False
         else:
-            if self.wakeup_matched:
-                self.wakeup_matched = False
-            util.printInfo(1, self.username, "[!] 语音未检测到内容！")
+            #TODO 为什么这个设为False
+            # if self.wakeup_matched:
+            #     self.wakeup_matched = False
             self.processing = False
+            util.printInfo(1, self.username, "[!] 语音未检测到内容！")
             self.dynamic_threshold = self.__get_history_percentage(30)
-            wsa_server.get_web_instance().add_cmd({"panelMsg": "", 'Username' : self.username})
-            if not cfg.config["interact"]["playSound"]: # 非展板播放
-                content = {'Topic': 'Unreal', 'Data': {'Key': 'log', 'Value': ""}, 'Username' : self.username}
+            if wsa_server.get_web_instance().is_connected(self.username):
+                wsa_server.get_web_instance().add_cmd({"panelMsg": "", 'Username' : self.username, 'robot': f'http://{cfg.fay_url}:5000/robot/Normal.jpg'})
+            if wsa_server.get_instance().is_connected(self.username):
+                content = {'Topic': 'Unreal', 'Data': {'Key': 'log', 'Value': ""}, 'Username' : self.username, 'robot': f'http://{cfg.fay_url}:5000/robot/Normal.jpg'}
                 wsa_server.get_instance().add_cmd(content)
 
     def __record(self):   
@@ -168,9 +198,12 @@ class Recorder:
         last_speaking_time = time.time()
         data = None
         concatenated_audio = bytearray()
+        audio_data_list = []
         while self.__running:
             try:
-                data = stream.read(2048, exception_on_overflow=False)
+                self.is_reading = True
+                data = stream.read(1024, exception_on_overflow=False)
+                self.is_reading = False
             except Exception as e:
                 data = None
                 print(e)
@@ -179,9 +212,23 @@ class Recorder:
             if not data:
                 continue 
 
+            #是否可以拾音,不可以就掉弃录音
+            can_listen = True
+            #没有开唤醒，但面板或数字人正在播音时不能拾音
+            if cfg.config['source']['wake_word_enabled'] == False and self.__fay.speaking == True:
+                can_listen = False
+            
+            #普通唤醒模式已经激活，并且面板或数字人正在输出声音时不能拾音
+            if cfg.config['source']['wake_word_enabled'] == True and cfg.config['source']['wake_word_type'] == 'common' and self.wakeup_matched == True and self.__fay.speaking == True:
+                can_listen = False
+
+            if can_listen == False:#掉弃录音
+                data = None
+                continue
+            
             #计算音量是否满足激活拾音
             level = audioop.rms(data, 2)
-            if len(self.__history_data) >= 5:#保存激活前的音频，以免信息掉失
+            if len(self.__history_data) >= 10:#保存激活前的音频，以免信息掉失
                 self.__history_data.pop(0)
             if len(self.__history_level) >= 500:
                 self.__history_level.pop(0)
@@ -193,23 +240,18 @@ class Recorder:
                 self.__dynamic_threshold += (history_percentage - self.__dynamic_threshold) * 0.0025
             elif history_percentage < self.__dynamic_threshold:
                 self.__dynamic_threshold += (history_percentage - self.__dynamic_threshold) * 1
-
-            #是否可以拾音:fay_core没有在播放，或者开启了唤醒（可以打断）时可以拾音
-            can_listen = False
-            if cfg.config['source']['wake_word_enabled']:    
-                can_listen = True
-            else:
-                if not self.__fay.speaking:
-                     can_listen = True
-                else:
-                     can_listen = False
             
             #激活拾音
-            if percentage > self.__dynamic_threshold and can_listen:
+            if percentage > self.__dynamic_threshold:
                 last_speaking_time = time.time()
                 if not self.__processing and not isSpeaking and time.time() - last_mute_time > _ATTACK:
                     isSpeaking = True  #用户正在说话
-                    util.printInfo(3, self.username,"聆听中...")
+                    util.printInfo(1, self.username,"聆听中...")
+                    if wsa_server.get_web_instance().is_connected(self.username):
+                        wsa_server.get_web_instance().add_cmd({"panelMsg": "聆听中...", 'Username' : self.username, 'robot': f'http://{cfg.fay_url}:5000/robot/Listening.jpg'})
+                    if wsa_server.get_instance().is_connected(self.username):
+                        content = {'Topic': 'Unreal', 'Data': {'Key': 'log', 'Value': "聆听中..."}, 'Username' : self.username, 'robot': f'http://{cfg.fay_url}:5000/robot/Listening.jpg'}
+                        wsa_server.get_instance().add_cmd(content)
                     concatenated_audio.clear()
                     self.__aLiNls = self.asrclient()
                     try:
@@ -219,27 +261,63 @@ class Recorder:
                         util.printInfo(1, self.username, "aliyun asr 连接受限")
                     for i in range(len(self.__history_data) - 1): #当前data在下面会做发送，这里是发送激活前的音频数据，以免漏掉信息
                         buf = self.__history_data[i]
+                        audio_data_list.append(self.__process_audio_data(buf, self.channels))
                         if self.ASRMode == "ali":
-                            self.__aLiNls.send(buf)
+                            self.__aLiNls.send(self.__process_audio_data(buf, self.channels).tobytes())
                         else:
-                            concatenated_audio.extend(buf)
+                            concatenated_audio.extend(self.__process_audio_data(buf, self.channels).tobytes())
                     self.__history_data.clear()
             else:#结束拾音
                 last_mute_time = time.time()
                 if isSpeaking:
                     if time.time() - last_speaking_time > _RELEASE: #TODO 更换的vad更靠谱
                         isSpeaking = False
-                        util.printInfo(1, self.username, "语音处理中...")
                         self.__aLiNls.end()
-                        self.__fay.last_quest_time = time.time()
+                        util.printInfo(1, self.username, "语音处理中...")
                         self.__waitingResult(self.__aLiNls, concatenated_audio)
+
+                        mono_data = self.__concatenate_audio_data(audio_data_list)
+                        self.__save_audio_to_wav(mono_data, self.sample_rate, "cache_data/input.wav")
+                        audio_data_list = []
             
-            #向asr server传输数据
+            #拾音中
             if isSpeaking:
+                audio_data_list.append(self.__process_audio_data(data, self.channels))
                 if self.ASRMode == "ali":
-                    self.__aLiNls.send(data)
+                    self.__aLiNls.send(self.__process_audio_data(data, self.channels).tobytes())
                 else:
-                    concatenated_audio.extend(data)
+                    concatenated_audio.extend(self.__process_audio_data(data, self.channels).tobytes())
+        
+    def __save_audio_to_wav(self, data, sample_rate, filename):
+        # 确保数据类型为 int16
+        if data.dtype != np.int16:
+            data = data.astype(np.int16)
+        
+        # 打开 WAV 文件
+        with wave.open(filename, 'wb') as wf:
+            # 设置音频参数
+            n_channels = 1  # 单声道
+            sampwidth = 2   # 16 位音频，每个采样点 2 字节
+            wf.setnchannels(n_channels)
+            wf.setsampwidth(sampwidth)
+            wf.setframerate(sample_rate)
+            wf.writeframes(data.tobytes())
+
+    def __concatenate_audio_data(self, audio_data_list):
+        # 将累积的音频数据块连接起来
+        data = np.concatenate(audio_data_list)
+        return data
+    
+    #转变为单声道np.int16
+    def __process_audio_data(self, data, channels):
+        data = bytearray(data)
+        # 将字节数据转换为 numpy 数组
+        data = np.frombuffer(data, dtype=np.int16)
+        # 重塑数组，将数据分离成多个声道
+        data = np.reshape(data, (-1, channels))
+        # 对所有声道的数据进行平均，生成单声道
+        mono_data = np.mean(data, axis=1).astype(np.int16)
+        return mono_data
      
     def set_processing(self, processing):
         self.__processing = processing
