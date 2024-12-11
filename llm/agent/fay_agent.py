@@ -27,7 +27,7 @@ class FayAgentCore():
         os.environ["LANGCHAIN_TRACING_V2"] = "true"
         os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
         os.environ["LANGCHAIN_API_KEY"] = "lsv2_pt_REDACTED"
-        os.environ["LANGCHAIN_PROJECT"] = "pr-best-artist-21"
+        os.environ["LANGCHAIN_PROJECT"] = "my-agent"
 
         #创建llm
         self.llm = ChatOpenAI(model=cfg.gpt_model_engine)
