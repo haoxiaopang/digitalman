@@ -49,8 +49,6 @@ class FayAgentCore():
         self.tools = [my_timer, weather_tool, query_timer_db_tool, delete_timer_tool, 
                      python_executor, web_page_retriever, web_page_scraper, to_remind]
 
-
-
         self.attr_info = ", ".join(f"{key}: {value}" for key, value in cfg.config["attribute"].items())
         self.prompt_template = """
             现在时间是：{now_time}。你是一个数字人，负责协助主人处理问题和陪伴主人生活、工作。你的个人资料是：{attr_info}。通过外部设备观测到：{observation}。\n请依据以上信息为主人服务。
