@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 #作用是处理交互逻辑，文字输入，语音、文字及情绪的发送、播放及展示输出
 import math
 from operator import index
@@ -72,7 +73,7 @@ class FeiFei:
         self.speaking = False #声音是否在播放
         self.__running = True
         self.sp.connect()  #TODO 预连接
-        self.cemotion = None
+
         self.timer = None
         self.sound_query = Queue()
         self.think_mode_users = {}  # 使用字典存储每个用户的think模式状态
@@ -119,9 +120,9 @@ class FeiFei:
 
         return filtered_text
 
-    def __process_qa_stream(self, text, username):
+    def __process_stream_output(self, text, username, session_type="type2_stream", is_qa=False):
         """
-        按流式方式分割和发送Q&A答案
+        按流式方式分割和发送 type=2 的文本
         使用安全的流式文本处理器和状态管理器
         """
         if not text or text.strip() == "":
@@ -134,14 +135,14 @@ class FeiFei:
         processor = get_processor()
         state_manager = get_state_manager()
 
-        # 处理Q&A流式文本，is_qa=True表示Q&A模式
-        success = processor.process_stream_text(text, username, is_qa=True, session_type="qa")
+        # 处理流式文本，is_qa=False表示普通模式
+        success = processor.process_stream_text(text, username, is_qa=is_qa, session_type=session_type)
 
         if success:
-            # Q&A模式结束会话（不再需要发送额外的结束标记）
-            state_manager.end_session(username)
+            # 普通模式结束会话
+            state_manager.end_session(username, conversation_id=stream_manager.new_instance().get_conversation_id(username))
         else:
-            util.log(1, f"Q&A流式处理失败，文本长度: {len(text)}")
+            util.log(1, f"type=2流式处理失败，文本长度: {len(text)}")
             # 失败时也要确保结束会话
             state_manager.force_reset_user_state(username)
 
@@ -156,14 +157,16 @@ class FeiFei:
             return None, None
         
        
-    #语音消息处理
+    #消息处理
     def __process_interact(self, interact: Interact):
         if self.__running:
             try:
                 index = interact.interact_type
                 username = interact.data.get("user", "User")
                 uid = member_db.new_instance().find_user(username)
-                if index == 1: #语音文字交互
+                
+                if index == 1: #语音、文字交互
+                    
                     #记录用户问题,方便obs等调用
                     self.write_to_file("./logs", "asr_result.txt",  interact.data["msg"])
 
@@ -193,20 +196,38 @@ class FeiFei:
                     else: 
                         text = answer
                         # 使用流式分割处理Q&A答案
-                        self.__process_qa_stream(text, username)
+                        self.__process_stream_output(text, username, session_type="qa", is_qa=True)
                            
-                    #完整文本记录回复并输出到各个终端
-                    self.__process_text_output(text, username, uid  )
 
                     return text      
                 
-                elif (index == 2):#透传模式，用于适配自动播报控制及agent的通知工具
+                elif (index == 2):#透传模式：有音频则仅播音频；仅文本则流式+TTS
+                    audio_url = interact.data.get("audio")
+                    text = interact.data.get("text")
 
-                    if interact.data.get("text"):
-                        text = interact.data.get("text")
-                        # 使用统一的文本处理方法，空列表表示没有额外回复
-                        self.__process_text_output(text, username, uid)
-                        MyThread(target=self.say, args=[interact, text]).start()  
+                    # 1) 存在音频：忽略文本，仅播放音频
+                    if audio_url and str(audio_url).strip():
+                        try:
+                            audio_interact = Interact(
+                                "stream", 1,
+                                {"user": username, "msg": "", "isfirst": True, "isend": True, "audio": audio_url}
+                            )
+                            self.say(audio_interact, "")
+                        except Exception:
+                            pass
+                        return 'success'
+
+                    # 2) 只有文本：执行流式切分并TTS
+                    if text and str(text).strip():
+                        # 进行流式处理（用于TTS，流式处理中会记录到数据库）
+                        self.__process_stream_output(text, username, f"type2_{interact.interleaver}", is_qa=False)
+                        
+                        # 不再需要额外记录，因为流式处理已经记录了
+                        # self.__process_text_output(text, username, uid)
+                        
+                        return 'success'
+
+                    # 没有有效内容
                     return 'success'
    
             except BaseException as e:
@@ -225,14 +246,30 @@ class FeiFei:
             file.flush()  
             os.fsync(file.fileno()) 
 
-    #触发语音交互
+    #触发交互
     def on_interact(self, interact: Interact):
         #创建用户
         username = interact.data.get("user", "User")
         if member_db.new_instance().is_username_exist(username)  == "notexists":
             member_db.new_instance().add_user(username)
-        MyThread(target=self.__process_interact, args=[interact]).start()
-        return None
+        try:
+            from utils.stream_state_manager import get_state_manager
+            import uuid
+            if get_state_manager().is_session_active(username):
+                stream_manager.new_instance().clear_Stream_with_audio(username)
+            conv_id = "conv_" + str(uuid.uuid4())
+            stream_manager.new_instance().set_current_conversation(username, conv_id)
+            # 将当前会话ID附加到交互数据
+            interact.data["conversation_id"] = conv_id
+            # 允许新的生成
+            stream_manager.new_instance().set_stop_generation(username, stop=False)
+        except Exception:
+            util.log(3, "开启新会话失败")
+
+        if interact.interact_type == 1:
+            MyThread(target=self.__process_interact, args=[interact]).start()
+        else:
+            return self.__process_interact(interact)
 
     #获取不同情绪声音
     def __get_mood_voice(self):
@@ -249,23 +286,71 @@ class FeiFei:
             uid = member_db.new_instance().find_user(interact.data.get("user"))
             is_end = interact.data.get("isend", False)
             is_first = interact.data.get("isfirst", False)
-
-            if is_first == True:
-                conv = "conv_" + str(uuid.uuid4())
-                conv_no = 0
-                self.user_conv_map[interact.data.get("user", "User")] = {"conversation_id" : conv, "conversation_msg_no" : conv_no}
-            else:
-                self.user_conv_map[interact.data.get("user", "User")]["conversation_msg_no"] += 1
-
-
+            username = interact.data.get("user", "User")
+            
+            # 提前进行会话有效性与中断检查，避免产生多余面板/数字人输出
+            try:
+                user_for_stop = interact.data.get("user", "User")
+                conv_id_for_stop = interact.data.get("conversation_id")
+                if not is_end and stream_manager.new_instance().should_stop_generation(user_for_stop, conversation_id=conv_id_for_stop):
+                    return None
+            except Exception:
+                pass
+            
+            #无效流式文本提前结束
             if not is_first and not is_end and (text is None or text.strip() == ""):
                 return None
                 
-            self.__send_panel_message(text, interact.data.get('user'), uid, 0, type)
+            # 流式文本拼接存库
+            content_id = 0
+            if is_first == True:
+                # reset any leftover think-mode at the start of a new reply
+                try:
+                    if uid is not None:
+                        self.think_mode_users[uid] = False
+                        if uid in self.think_time_users:
+                            del self.think_time_users[uid]
+                except Exception:
+                    pass
+                conv = interact.data.get("conversation_id") or ("conv_" + str(uuid.uuid4()))
+                conv_no = 0
+                # 创建第一条数据库记录，获得content_id
+                if text and text.strip():
+                    content_id = content_db.new_instance().add_content('fay', 'speak', text, username, uid)
+                else:
+                    content_id = content_db.new_instance().add_content('fay', 'speak', '', username, uid)
+                
+                # 保存content_id到会话映射中
+                self.user_conv_map[username] = {
+                    "conversation_id": conv, 
+                    "conversation_msg_no": conv_no,
+                    "content_id": content_id  # 新增：保存content_id
+                }
+            else:
+                self.user_conv_map[username]["conversation_msg_no"] += 1
+                # 获取之前保存的content_id
+                content_id = self.user_conv_map.get(username, {}).get("content_id", 0)
+                
+                # 如果有新内容，更新数据库
+                if content_id > 0 and text and text.strip():
+                    # 获取当前已有内容
+                    existing_content = content_db.new_instance().get_content_by_id(content_id)
+                    if existing_content:
+                        # 累积内容
+                        accumulated_text = existing_content[3] + text
+                        content_db.new_instance().update_content(content_id, accumulated_text)
+
+            
+            # 推送给前端和数字人
+            try:
+                user_for_stop = interact.data.get("user", "User")
+                conv_id_for_stop = interact.data.get("conversation_id")
+                if is_end or not stream_manager.new_instance().should_stop_generation(user_for_stop, conversation_id=conv_id_for_stop):
+                    self.__process_text_output(text, interact.data.get('user'), uid, content_id, type)
+            except Exception:
+                self.__process_text_output(text, interact.data.get('user'), uid, content_id, type)
             
             # 处理think标签
-            is_start_think = False
-            
             # 第一步：处理结束标记</think>
             if "</think>" in text:
                 # 设置用户退出思考模式
@@ -279,55 +364,76 @@ class FeiFei:
                 # 如果提取出的文本为空，则不需要继续处理
                 if text == "":
                     return None
-            
             # 第二步：处理开始标记<think>
             # 注意：这里要检查经过上面处理后的text
             if "<think>" in text:
-                is_start_think = True
                 self.think_mode_users[uid] = True
                 self.think_time_users[uid] = time.time()
-            
-            if self.think_mode_users.get(uid, False) and is_start_think:
-                if wsa_server.get_web_instance().is_connected(interact.data.get('user')):
-                    wsa_server.get_web_instance().add_cmd({"panelMsg": "思考中...", "Username" : interact.data.get('user'), 'robot': f'{cfg.fay_url}/robot/Thinking.jpg'})
-                if wsa_server.get_instance().is_connected(interact.data.get("user")):
-                    content = {'Topic': 'human', 'Data': {'Key': 'log', 'Value': "思考中..."}, 'Username' : interact.data.get('user'), 'robot': f'{cfg.fay_url}/robot/Thinking.jpg'}
-                    wsa_server.get_instance().add_cmd(content)
+   
+            #”思考中“的输出
+            if self.think_mode_users.get(uid, False):
+                try:
+                    user_for_stop = interact.data.get("user", "User")
+                    conv_id_for_stop = interact.data.get("conversation_id")
+                    should_block = stream_manager.new_instance().should_stop_generation(user_for_stop, conversation_id=conv_id_for_stop)
+                except Exception:
+                    should_block = False
+                if not should_block:
+                    if wsa_server.get_web_instance().is_connected(interact.data.get('user')):
+                        wsa_server.get_web_instance().add_cmd({"panelMsg": "思考中...", "Username" : interact.data.get('user'), 'robot': f'{cfg.fay_url}/robot/Thinking.jpg'})
+                    if wsa_server.get_instance().is_connected(interact.data.get("user")):
+                        content = {'Topic': 'human', 'Data': {'Key': 'log', 'Value': "思考中..."}, 'Username' : interact.data.get('user'), 'robot': f'{cfg.fay_url}/robot/Thinking.jpg'}
+                        wsa_server.get_instance().add_cmd(content)
 
-            if self.think_mode_users[uid] == True and time.time() - self.think_time_users[uid] >= 5:
+            #”请稍等“的输出
+            if self.think_mode_users.get(uid, False) == True and time.time() - self.think_time_users[uid] >= 5:
                 self.think_time_users[uid] = time.time()
                 text = "请稍等..."
-            
-            # 流式输出think中的内容
             elif self.think_mode_users.get(uid, False) == True and "</think>" not in text:
                 return None
             
             result = None
-            audio_url = interact.data.get('audio')#透传的音频
+            audio_url = interact.data.get('audio', None)#透传的音频
             if audio_url is not None:#透传音频下载
                 file_name = 'sample-' + str(int(time.time() * 1000)) + audio_url[-4:]
                 result = self.download_wav(audio_url, './samples/', file_name)
             elif config_util.config["interact"]["playSound"] or wsa_server.get_instance().is_connected(interact.data.get("user")) or self.__is_send_remote_device_audio(interact):#tts
                 if text != None and text.replace("*", "").strip() != "":
+                    # 检查是否需要停止TTS处理（按会话）
+                    if stream_manager.new_instance().should_stop_generation(
+                        interact.data.get("user", "User"),
+                        conversation_id=interact.data.get("conversation_id")
+                    ):
+                        util.printInfo(1, interact.data.get('user'), 'TTS处理被打断，跳过音频合成')
+                        return None
+                        
                     # 先过滤表情符号，然后再合成语音
                     filtered_text = self.__remove_emojis(text.replace("*", ""))
                     if filtered_text is not None and filtered_text.strip() != "":
                         util.printInfo(1,  interact.data.get('user'), '合成音频...')
                         tm = time.time()
                         result = self.sp.to_sample(filtered_text, self.__get_mood_voice())
+                        # 合成完成后再次检查会话是否仍有效，避免继续输出旧会话结果
+                        try:
+                            user_for_stop = interact.data.get("user", "User")
+                            conv_id_for_stop = interact.data.get("conversation_id")
+                            if stream_manager.new_instance().should_stop_generation(user_for_stop, conversation_id=conv_id_for_stop):
+                                return None
+                        except Exception:
+                            pass
                         util.printInfo(1,  interact.data.get("user"), "合成音频完成. 耗时: {} ms 文件:{}".format(math.floor((time.time() - tm) * 1000), result))
             else:
                 if is_end and wsa_server.get_web_instance().is_connected(interact.data.get('user')):
                     wsa_server.get_web_instance().add_cmd({"panelMsg": "", 'Username' : interact.data.get('user'), 'robot': f'{cfg.fay_url}/robot/Normal.jpg'})
 
             if result is not None or is_first or is_end:
-                if is_end:#如果结束标记，则延迟1秒处理,免得is end比前面的音频tts要快
+                if is_end:#TODO 临时方案：如果结束标记，则延迟1秒处理,免得is end比前面的音频tts要快
                     time.sleep(1)          
                 MyThread(target=self.__process_output_audio, args=[result, interact, text]).start()
                 return result         
                 
         except BaseException as e:
-            print(e)
+            print(e) 
         return None
     
     #下载wav
@@ -402,6 +508,17 @@ class FeiFei:
                     # 播放过程中计时，直到音频播放完毕
                     length = 0
                     while length < audio_length:
+                        try:
+                            user_for_stop = interact.data.get("user", "User")
+                            conv_id_for_stop = interact.data.get("conversation_id")
+                            if stream_manager.new_instance().should_stop_generation(user_for_stop, conversation_id=conv_id_for_stop):
+                                try:
+                                    pygame.mixer.music.stop()
+                                except Exception:
+                                    pass
+                                break
+                        except Exception:
+                            pass
                         length += 0.01
                         time.sleep(0.01)
 
@@ -451,6 +568,14 @@ class FeiFei:
     #输出音频处理
     def __process_output_audio(self, file_url, interact, text):
         try:
+            # 会话有效性与中断检查（最早返回，避免向面板/数字人发送任何旧会话输出）
+            try:
+                user_for_stop = interact.data.get("user", "User")
+                conv_id_for_stop = interact.data.get("conversation_id")
+                if stream_manager.new_instance().should_stop_generation(user_for_stop, conversation_id=conv_id_for_stop):
+                    return
+            except Exception:
+                pass
             try:
                 if file_url is None:
                     audio_length = 0
@@ -486,7 +611,8 @@ class FeiFei:
             #面板播放
             config_util.load_config()
             if config_util.config["interact"]["playSound"]:
-                  self.sound_query.put((file_url, audio_length, interact))
+                # 检查是否需要停止音频播放（按会话）
+                self.sound_query.put((file_url, audio_length, interact))
             else:
                 if wsa_server.get_web_instance().is_connected(interact.data.get('user')):
                     wsa_server.get_web_instance().add_cmd({"panelMsg": "", 'Username' : interact.data.get('user'), 'robot': f'{cfg.fay_url}/robot/Normal.jpg'})
@@ -518,9 +644,6 @@ class FeiFei:
 
     #启动核心服务
     def start(self):
-        if cfg.ltp_mode == "cemotion":
-            from cemotion import Cemotion
-            self.cemotion = Cemotion()
         MyThread(target=self.__play_sound).start()
 
     #停止核心服务
@@ -555,13 +678,13 @@ class FeiFei:
         if not wsa_server.get_web_instance().is_connected(username):
             return
             
-        # 发送基本消息
+        # gui日志区消息
         wsa_server.get_web_instance().add_cmd({
             "panelMsg": text,
             "Username": username
         })
         
-        # 如果有content_id，发送回复消息
+        # 聊天窗消息
         if content_id is not None:
             wsa_server.get_web_instance().add_cmd({
                 "panelReply": {
@@ -593,9 +716,9 @@ class FeiFei:
             }
             wsa_server.get_instance().add_cmd(content)
 
-    def __process_text_output(self, text, username, uid):
+    def __process_text_output(self, text, username, uid, content_id, type):
         """
-        处理文本输出到各个终端
+        完整文本输出到各个终端
         :param text: 主要回复文本
         :param textlist: 额外回复列表
         :param username: 用户名
@@ -606,14 +729,15 @@ class FeiFei:
             text = text.strip()
             
         # 记录主回复
-        content_id = self.__record_response(text, username, uid)
+        # content_id = self.__record_response(text, username, uid)
         
         # 发送主回复到面板和数字人
-        # self.__send_panel_message(text, username, uid, content_id, type)
+        self.__send_panel_message(text, username, uid, content_id, type)
         self.__send_digital_human_message(text, username)
         
         # 打印日志
-        util.printInfo(1, username, '({}) {}'.format(self.__get_mood_voice(), text))
+        util.printInfo(1, username, '({}) {}'.format("llm", text))
 
 import importlib
 fay_booter = importlib.import_module('fay_booter')
+

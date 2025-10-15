@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import importlib
 import json
 import time
@@ -15,6 +16,11 @@ import uuid
 import fay_booter
 from tts import tts_voice
 from gevent import pywsgi
+try:
+    # Use gevent.sleep to avoid blocking the gevent loop; fallback to time.sleep if unavailable
+    from gevent import sleep as gsleep
+except Exception:
+    from time import sleep as gsleep
 from scheduler.thread_manager import MyThread
 from utils import config_util, util
 from core import wsa_server
@@ -240,7 +246,7 @@ def api_start_live():
     # 启动
     try:
         fay_booter.start()
-        time.sleep(1)
+        gsleep(1)
         wsa_server.get_web_instance().add_cmd({"liveState": 1})
         return '{"result":"successful"}'
     except Exception as e:
@@ -251,7 +257,7 @@ def api_stop_live():
     # 停止
     try:
         fay_booter.stop()
-        time.sleep(1)
+        gsleep(1)
         wsa_server.get_web_instance().add_cmd({"liveState": 0})
         return '{"result":"successful"}'
     except Exception as e:
@@ -270,6 +276,7 @@ def api_send():
         if not username or not msg:
             return jsonify({'result': 'error', 'message': '用户名和消息内容不能为空'})
         msg = msg.strip()
+      
         interact = Interact("text", 1, {'user': username, 'msg': msg})
         util.printInfo(1, username, '[文字发送按钮]{}'.format(interact.data["msg"]), time.time())
         fay_booter.feiFei.on_interact(interact)
@@ -309,6 +316,7 @@ def api_get_Msg():
     except Exception as e:
         return jsonify({'list': [], 'message': f'获取消息时出错: {e}'}), 500
 
+#文字沟通接口
 @__app.route('/v1/chat/completions', methods=['post'])
 @__app.route('/api/send/v1/chat/completions', methods=['post'])
 def api_send_v1_chat_completions():
@@ -330,17 +338,17 @@ def api_send_v1_chat_completions():
 
         model = data.get('model', 'fay')
         observation = data.get('observation', '')
-        interact = Interact("text", 1, {'user': username, 'msg': last_content, 'observation': str(observation)})
-        util.printInfo(1, username, '[文字沟通接口]{}'.format(interact.data["msg"]), time.time())
-        fay_booter.feiFei.on_interact(interact)
-
         # 检查请求中是否指定了流式传输
         stream_requested = data.get('stream', False)
-        
-        # 优先使用请求中的stream参数，如果没有指定则使用配置中的设置
         if stream_requested or model == 'fay-streaming':
+            interact = Interact("text", 1, {'user': username, 'msg': last_content, 'observation': str(observation), 'stream':True})
+            util.printInfo(1, username, '[文字沟通接口(流式)]{}'.format(interact.data["msg"]), time.time())
+            fay_booter.feiFei.on_interact(interact)
             return gpt_stream_response(last_content, username)
         else:
+            interact = Interact("text", 1, {'user': username, 'msg': last_content, 'observation': str(observation), 'stream':False})
+            util.printInfo(1, username, '[文字沟通接口(非流式)]{}'.format(interact.data["msg"]), time.time())
+            fay_booter.feiFei.on_interact(interact)
             return non_streaming_response(last_content, username)
     except Exception as e:
         return jsonify({'error': f'处理请求时出错: {e}'}), 500
@@ -397,18 +405,29 @@ def adopt_msg():
         return jsonify({'status':'error', 'msg': f'采纳消息时出错: {e}'}), 500
 
 def gpt_stream_response(last_content, username):
-    _, nlp_Stream = stream_manager.new_instance().get_Stream(username)
+    sm = stream_manager.new_instance()
+    _, nlp_Stream = sm.get_Stream(username)
     def generate():
+        conversation_id = sm.get_conversation_id(username)
         while True:
             sentence = nlp_Stream.read()
             if sentence is None:
-                time.sleep(0.01)
+                gsleep(0.01)
                 continue
             
-            # 处理特殊标记
+            # 跳过非当前会话
+            try:
+                m = re.search(r"__<cid=([^>]+)>__", sentence)
+                producer_cid = m.group(1)
+                if producer_cid != conversation_id:
+                    continue
+                if m:
+                    sentence = sentence.replace(m.group(0), "")
+            except Exception as e:
+                print(e)
             is_first = "_<isfirst>" in sentence
             is_end = "_<isend>" in sentence
-            content = sentence.replace("_<isfirst>", "").replace("_<isend>", "")
+            content = sentence.replace("_<isfirst>", "").replace("_<isend>", "").replace("_<isqa>", "")
             if content or is_first or is_end:  # 只有当有实际内容时才发送
                 message = {
                     "id": "faystreaming-" + str(uuid.uuid4()),
@@ -432,34 +451,40 @@ def gpt_stream_response(last_content, username):
                     },
                     "system_fingerprint": ""
                 }
-                if is_end:
-                    if username in fay_booter.feiFei.nlp_streams:
-                        stream_manager.new_instance().clear_Stream(username)
                 yield f"data: {json.dumps(message)}\n\n"
             if is_end:
                 break
-            time.sleep(0.01)
+            gsleep(0.01)
         yield 'data: [DONE]\n\n'
     
     return Response(generate(), mimetype='text/event-stream')
 
 # 处理非流式响应
 def non_streaming_response(last_content, username):
-    _, nlp_Stream = stream_manager.new_instance().get_Stream(username)
+    sm = stream_manager.new_instance()
+    _, nlp_Stream = sm.get_Stream(username)
     text = ""
+    conversation_id = sm.get_conversation_id(username)
     while True:
         sentence = nlp_Stream.read()
         if sentence is None:
-            time.sleep(0.01)
+            gsleep(0.01)
             continue
         
-        # 处理特殊标记
+        # 跳过非当前会话
+        try:
+            m = re.search(r"__<cid=([^>]+)>__", sentence)
+            producer_cid = m.group(1)
+            if producer_cid != conversation_id:
+                continue
+            if m:
+                sentence = sentence.replace(m.group(0), "")
+        except Exception as e:
+            print(e)
         is_first = "_<isfirst>" in sentence
         is_end = "_<isend>" in sentence
-        text += sentence.replace("_<isfirst>", "").replace("_<isend>", "")
+        text += sentence.replace("_<isfirst>", "").replace("_<isend>", "").replace("_<isqa>", "")
         if is_end:
-            if username in fay_booter.feiFei.nlp_streams:
-                stream_manager.new_instance().clear_Stream(username)
             break
     return jsonify({
         "id": "fay-" + str(uuid.uuid4()),
@@ -560,16 +585,17 @@ def to_stop_talking():
     try:
         data = request.get_json()
         username = data.get('username', 'User')
-        message = data.get('text', '你好，请说？')
-        observation = data.get('observation', '')
-        interact = Interact("stop_talking", 2, {'user': username, 'text': message, 'observation': str(observation)})
-        result = fay_booter.feiFei.on_interact(interact)
+        stream_manager.new_instance().clear_Stream_with_audio(username)
+        
+        result = "interrupted"  # 简单的结果标识
         return jsonify({
             'status': 'success',
             'data': str(result) if result is not None else '',
-            'msg': '已停止说话'
+            'msg': f'已停止用户 {username} 的说话'
         }), 200
     except Exception as e:
+        username_str = username if 'username' in locals() else 'Unknown'
+        util.printInfo(1, username_str, f"打断操作失败: {str(e)}")
         return jsonify({
             'status': 'error',
             'msg': str(e)
@@ -585,15 +611,19 @@ def transparent_pass():
             data = request.get_json()
         else:
             data = json.loads(data)
-        user = data.get('user', 'User')
-        response_text = data.get('text', '')
-        audio_url = data.get('audio', '')
-        interact = Interact('transparent_pass', 2, {'user': user, 'text': response_text, 'audio': audio_url})
-        util.printInfo(1, user, '透传播放：{}，{}'.format(response_text, audio_url), time.time())
-        success = fay_booter.feiFei.on_interact(interact)
-        if (success == 'success'):
-            return jsonify({'code': 200, 'message' : '成功'})
-        return jsonify({'code': 500, 'message' : '未错原因出错'})
+        username = data.get('user', 'User')
+        response_text = data.get('text', None)
+        audio_url = data.get('audio', None)
+        if response_text or audio_url:
+            # 新消息到达，立即中断该用户之前的所有处理（文本流+音频队列）
+            util.printInfo(1, username, f'[API中断] 新消息到达，完整中断用户 {username} 之前的所有处理')
+            util.printInfo(1, username, f'[API中断] 用户 {username} 的文本流和音频队列已清空，准备处理新消息')
+            interact = Interact('transparent_pass', 2, {'user': username, 'text': response_text, 'audio': audio_url, 'isend':True, 'isfirst':True})
+            util.printInfo(1, username, '透传播放：{}，{}'.format(response_text, audio_url), time.time())
+            success = fay_booter.feiFei.on_interact(interact)
+            if (success == 'success'):
+                return jsonify({'code': 200, 'message' : '成功'})
+        return jsonify({'code': 500, 'message' : '未知原因出错'})
     except Exception as e:
         return jsonify({'code': 500, 'message': f'出错: {e}'}), 500
 
@@ -724,7 +754,7 @@ def api_start_genagents():
         def monitor_shutdown():
             try:
                 while not is_shutdown_requested():
-                    time.sleep(1)
+                    gsleep(1)
                 util.log(1, f"检测到关闭请求，正在关闭决策分析服务...")
                 genagents_server.shutdown()
             except Exception as e:

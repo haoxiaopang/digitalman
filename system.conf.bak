@@ -33,20 +33,12 @@ volcano_tts_cluster=volcano_tts
 #可为空，为空时读取选择的音色
 volcano_tts_voice_type=
 
-#情绪分析选择(baidu(服务秘钥为空时，默认不使用情绪分析),cemotion二选一（建议第一次运行cemotion时，先运行/test/test_cemotion.py去下载所需文件）)
-ltp_mode = baidu
-
-#百度 情绪分析 服务秘钥 https://cloud.baidu.com/
-baidu_emotion_app_id=
-baidu_emotion_api_key=
-baidu_emotion_secret_key=
-
 #key
-gpt_api_key=sk-REDACTED
+gpt_api_key=
 #gpt base url 如：https://api.openai.com/v1、https://rwkv.ai-creator.net/chntuned/v1、https://api.fastgpt.in/api/v1、https://api.moonshot.cn/v1
-gpt_base_url=http://219.135.170.56:1234/v1
+gpt_base_url=
 #gpt model engine 如：glm4、deepseek、qwen3-4b等
-gpt_model_engine=qwen3-4b
+gpt_model_engine=
 #gpt(fastgpt)代理(可为空，填写例子：127.0.0.1:7890)
 proxy_config=
 
@@ -55,4 +47,3 @@ start_mode=web
 
 #服务器主动地址
 fay_url=http://127.0.0.1:5000
-
