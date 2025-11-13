@@ -38,13 +38,15 @@ except ImportError:
 
 from utils import util
 import utils.config_util as cfg
-from genagents.genagents import GenerativeAgent
-from genagents.modules.memory_stream import ConceptNode
 from urllib3.exceptions import InsecureRequestWarning
 from scheduler.thread_manager import MyThread
 from core import content_db
 from core import stream_manager
 from faymcp import tool_registry as mcp_tool_registry
+
+# 新增：长短期记忆系统相关导入
+from bionicmemory.core.chroma_service import ChromaService
+from bionicmemory.core.memory_system import LongShortTermMemorySystem, SourceType
 
 # 加载配置
 cfg.load_config()
@@ -52,16 +54,13 @@ cfg.load_config()
 # 禁用不安全请求警告
 requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 
-agents = {}  # type: dict[str, GenerativeAgent]
-agent_lock = threading.RLock()  # 使用可重入锁保护agent对象
-reflection_lock = threading.RLock()  # 使用可重入锁保护reflection_time
-save_lock = threading.RLock()  # 使用可重入锁保护save_time
-reflection_time = None
-save_time = None
+# 记忆系统全局变量
+chroma_service = None  # ChromaDB服务实例
+memory_system = None   # 长短期记忆系统实例
+memory_system_lock = threading.RLock()  # 保护记忆系统的锁
 
-memory_cleared = False  # 添加记忆清除标记
-# 新增: 当前会话用户名及按用户获取memory目录的辅助函数
-current_username = None  # 当前会话用户名
+# 当前会话用户名（保留，用于兼容性）
+current_username = None
 
 llm = ChatOpenAI(
         model=cfg.gpt_model_engine,
@@ -69,6 +68,49 @@ llm = ChatOpenAI(
         api_key=cfg.key_gpt_api_key,
         streaming=True
     )
+
+
+def init_memory_system():
+    """
+    初始化长短期记忆系统
+
+    Returns:
+        bool: 是否初始化成功
+    """
+    global chroma_service, memory_system
+
+    try:
+        util.log(1, "正在初始化记忆系统...")
+
+        # 启动时检查并清除数据库（如果存在清除标记）
+        if ChromaService.check_and_clear_database_on_startup():
+            util.log(1, "检测到记忆清除标记，已清除ChromaDB数据库")
+
+        # 初始化ChromaDB服务
+        chroma_service = ChromaService()
+        if not chroma_service:
+            util.log(1, "ChromaDB服务初始化失败")
+            return False
+
+        # 初始化长短期记忆系统
+        memory_system = LongShortTermMemorySystem(
+            chroma_service=chroma_service,
+            summary_threshold=500,
+            max_retrieval_results=10,
+            cluster_multiplier=3,
+            retrieval_multiplier=2
+        )
+
+        util.log(1, "记忆系统初始化成功")
+        return True
+
+    except Exception as e:
+        util.log(1, f"记忆系统初始化失败: {e}")
+        return False
+
+
+# 在模块加载时初始化记忆系统
+init_memory_system()
 
 
 @dataclass
@@ -310,7 +352,6 @@ def _build_planner_messages(state: AgentState) -> List[SystemMessage | HumanMess
     planner_preview = state.get("planner_preview")
     conversation = state.get("messages", []) or []
     history = state.get("tool_results", []) or []
-    memory_context = context.get("memory_context", "")
     knowledge_context = context.get("knowledge_context", "")
     observation = context.get("observation", "")
 
@@ -329,9 +370,6 @@ def _build_planner_messages(state: AgentState) -> List[SystemMessage | HumanMess
 
 **额外观察**
 {observation or '（无补充）'}
-
-**关联记忆**
-{memory_context or '（无相关记忆）'}
 
 **关联知识**
 {knowledge_context or '（无相关知识）'}
@@ -363,7 +401,6 @@ def _build_final_messages(state: AgentState) -> List[SystemMessage | HumanMessag
     system_prompt = context.get("system_prompt", "")
     request = state.get("request", "")
     knowledge_context = context.get("knowledge_context", "")
-    memory_context = context.get("memory_context", "")
     observation = context.get("observation", "")
     conversation = state.get("messages", []) or []
     planner_preview = state.get("planner_preview")
@@ -378,9 +415,6 @@ def _build_final_messages(state: AgentState) -> List[SystemMessage | HumanMessag
 
 {system_prompt}
 
-**关联记忆**
-{memory_context or '（无相关记忆）'}
-
 **关联知识**
 {knowledge_context or '（无相关知识）'}
 
@@ -393,6 +427,7 @@ def _build_final_messages(state: AgentState) -> List[SystemMessage | HumanMessag
 **对话及工具记录**
 {conversation_block}"""
     ).strip()
+
     return [
         SystemMessage(content="你是最终回复的口播助手，请用中文自然表达。"),
         HumanMessage(content=user_block),
@@ -574,42 +609,6 @@ def _build_workflow_app() -> StateGraph:
 
 
 _WORKFLOW_APP = _build_workflow_app()
-
-def get_user_memory_dir(username=None):
-    """根据配置决定是否按用户名隔离记忆目录"""
-    if username is None:
-        username = current_username
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    mem_base = os.path.join(base_dir, "memory")
-    try:
-        cfg.load_config()
-        isolate = cfg.config["memory"]["isolate_by_user"]
-    except Exception:
-        isolate = False
-    if isolate and username:
-        return os.path.join(mem_base, str(username))
-    return mem_base
-
-def get_current_time_step(username=None):
-    """
-    获取当前时间作为time_step
-    
-    返回:
-        int: 当前时间步，从0开始，非真实时间
-    """
-    global agents
-    try:
-        # 按用户名选择对应agent，若未指定则退回全局agent
-        ag = agents.get(username) if username else None
-        if ag and ag.memory_stream and ag.memory_stream.seq_nodes:
-            # 如果有记忆节点，则使用最后一个节点的created属性加1
-            return int(ag.memory_stream.seq_nodes[-1].created) + 1
-        else:
-            # 如果没有记忆节点或agent未初始化，则使用0
-            return 0
-    except Exception as e:
-        util.log(1, f"获取time_step时出错: {str(e)}，使用0代替")
-        return 0
 
 # 新增：本地知识库相关函数
 def read_doc_file(file_path):
@@ -1000,217 +999,9 @@ def get_knowledge_base():
     return _knowledge_base_cache
 
 
-# 定时保存记忆的线程
-def memory_scheduler_thread():
-    """
-    定时任务线程，运行schedule调度器
-    """
-    while True:
-        schedule.run_pending()
-        time.sleep(60)  # 每分钟检查一次是否有定时任务需要执行
-
-# 初始化定时保存记忆的任务
-def init_memory_scheduler():
-    """
-    初始化定时保存记忆的任务
-    """
-    global agents
-    
-    # 确保agent已经创建
-    if not agents:
-        util.log(1, '创建代理实例...')
-        create_agent()
-    
-    # 设置每天0点保存记忆
-    schedule.every().day.at("00:00").do(save_agent_memory)
-    
-    # 设置每天晚上11点执行反思
-    schedule.every().day.at("23:00").do(perform_daily_reflection)
-    
-    # 启动定时任务线程
-    scheduler_thread = MyThread(target=memory_scheduler_thread)
-    scheduler_thread.start()
-    
-    util.log(1, '定时任务已启动：每天0点保存记忆，每天23点执行反思')
-
-def check_memory_files(username=None):
-    """
-    检查memory目录及其必要文件是否存在
-    
-    返回:
-        memory_dir: memory目录路径
-        is_complete: 是否已经存在完整的memory目录结构
-    """
-    
-    # 根据配置与用户名获取memory目录路径
-    memory_dir = get_user_memory_dir(username)
-
-    # 检查memory目录是否存在，不存在则创建
-    if not os.path.exists(memory_dir):
-        os.makedirs(memory_dir)
-        util.log(1, f"创建memory目录: {memory_dir}")
-    
-    # 删除.memory_cleared标记文件（如果存在）
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    mem_base = os.path.join(base_dir, "memory")
-    memory_cleared_flag_file = os.path.join(mem_base, ".memory_cleared")
-    if os.path.exists(memory_cleared_flag_file):
-        try:
-            os.remove(memory_cleared_flag_file)
-            util.log(1, f"清除删除记忆标记文件: {memory_cleared_flag_file}")
-            # 重置记忆清除标记
-            global memory_cleared
-            memory_cleared = False
-        except Exception as e:
-            util.log(1, f"清除删除记忆标记文件时出错: {str(e)}")
-    
-    # 检查meta.json是否存在
-    meta_file = os.path.join(memory_dir, "meta.json")
-    is_complete = os.path.exists(meta_file)
-    
-    # 检查memory_stream目录是否存在，不存在则创建
-    memory_stream_dir = os.path.join(memory_dir, "memory_stream")
-    if not os.path.exists(memory_stream_dir):
-        os.makedirs(memory_stream_dir)
-        util.log(1, f"创建memory_stream目录: {memory_stream_dir}")
-    
-    # 检查必要的文件是否存在
-    embeddings_path = os.path.join(memory_stream_dir, "embeddings.json")
-    nodes_path = os.path.join(memory_stream_dir, "nodes.json")
-    
-    # 检查文件是否存在且不为空
-    is_complete = (os.path.exists(embeddings_path) and os.path.getsize(embeddings_path) > 2 and
-                  os.path.exists(nodes_path) and os.path.getsize(nodes_path) > 2)
-    
-    # 如果文件不存在，创建空的JSON文件
-    if not os.path.exists(embeddings_path):
-        with open(embeddings_path, 'w', encoding='utf-8') as f:
-            f.write('{}')
-    
-    if not os.path.exists(nodes_path):
-        with open(nodes_path, 'w', encoding='utf-8') as f:
-            f.write('[]')
-    
-    return memory_dir, is_complete
-
-def create_agent(username=None):
-    """
-    创建一个GenerativeAgent实例
-    
-    返回:
-        agent: GenerativeAgent对象
-    """
-    global agents
-    
-    if username is None:
-        username = "User"
-    
-    # 创建/复用代理
-    with agent_lock:
-        if username in agents:
-            return agents[username]
-        
-        memory_dir, is_exist = check_memory_files(username)
-        agent = GenerativeAgent(memory_dir)
-        
-        # 检查是否有scratch属性，如果没有则添加
-        if not hasattr(agent, 'scratch'):
-            agent.scratch = {}
-        
-        # 初始化代理的scratch数据，始终从config_util实时加载
-        scratch_data = {
-            "first_name": cfg.config["attribute"]["name"],
-            "last_name": "",
-            "age": cfg.config["attribute"]["age"],
-            "sex": cfg.config["attribute"]["gender"],
-            "additional": cfg.config["attribute"]["additional"],
-            "birthplace": cfg.config["attribute"]["birth"],
-            "position": cfg.config["attribute"]["position"],
-            "zodiac": cfg.config["attribute"]["zodiac"],
-            "constellation": cfg.config["attribute"]["constellation"],
-            "contact": cfg.config["attribute"]["contact"],
-            "voice": cfg.config["attribute"]["voice"],  
-            "goal": cfg.config["attribute"]["goal"],
-            "occupation": cfg.config["attribute"]["job"],
-            "current_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-        agent.scratch = scratch_data
-        
-        # 如果memory目录存在且不为空，则加载之前保存的记忆（不包括scratch数据）
-        if is_exist:
-            load_agent_memory(agent, username)
-        
-        # 缓存到字典
-        agents[username] = agent
-    
-    return agent
-
-def load_agent_memory(agent, username=None):
-    """
-    从文件加载代理的记忆
-    
-    参数:
-        agent: GenerativeAgent对象
-    """
-    try:
-        # 获取memory目录路径（按需隔离）
-        memory_dir = get_user_memory_dir(username)
-        memory_stream_dir = os.path.join(memory_dir, "memory_stream")
-        
-        # 加载nodes.json
-        nodes_path = os.path.join(memory_stream_dir, "nodes.json")
-        if os.path.exists(nodes_path) and os.path.getsize(nodes_path) > 2:  # 文件存在且不为空
-            with open(nodes_path, 'r', encoding='utf-8') as f:
-                nodes_data = json.load(f)
-                
-                # 清空当前的seq_nodes
-                agent.memory_stream.seq_nodes = []
-                agent.memory_stream.id_to_node = {}
-                
-                # 重新创建节点
-                for node_dict in nodes_data:
-                    new_node = ConceptNode(node_dict)
-                    agent.memory_stream.seq_nodes.append(new_node)
-                    agent.memory_stream.id_to_node[new_node.node_id] = new_node
-        
-        # 加载embeddings.json
-        embeddings_path = os.path.join(memory_stream_dir, "embeddings.json")
-        if os.path.exists(embeddings_path) and os.path.getsize(embeddings_path) > 2:  # 文件存在且不为空
-            with open(embeddings_path, 'r', encoding='utf-8') as f:
-                embeddings_data = json.load(f)
-                agent.memory_stream.embeddings = embeddings_data
-        
-        util.log(1, f"已加载代理记忆")
-    except Exception as e:
-        util.log(1, f"加载代理记忆失败: {str(e)}")
-
-# 记忆对话内容的线程函数
-def remember_conversation_thread(username, content, response_text):
-    """
-    在单独线程中记录对话内容到代理记忆
-    
-    参数:
-        username: 用户名
-        content: 用户问题内容
-        response_text: 代理回答内容
-    """
-    global agents
-    try:
-        with agent_lock:
-            ag = agents.get(username)
-            if ag is None:
-                return
-            time_step = get_current_time_step(username)
-            name = "主人" if username == "User" else username
-            # 记录对话内容
-            memory_content = f"在对话中，我回答了{name}的问题：{content}\n，我的回答是：{response_text}"
-            ag.remember(memory_content, time_step)
-    except Exception as e:
-        util.log(1, f"记忆对话内容出错: {str(e)}")
-
 def question(content, username, observation=None):
     """处理用户提问并返回回复。"""
-    global agents, current_username
+    global current_username
     current_username = username
     full_response_text = ""
     accumulated_text = ""
@@ -1221,45 +1012,42 @@ def question(content, username, observation=None):
     sm = stream_manager.new_instance()
     conversation_id = sm.get_conversation_id(username)
 
-    agent = create_agent(username)
-
+    # 记忆系统已在全局初始化，无需创建agent
+    # 直接从配置文件获取人物设定
     agent_desc = {
-        "first_name": agent.scratch.get("first_name", "Fay"),
-        "last_name": agent.scratch.get("last_name", ""),
-        "age": agent.scratch.get("age", "成年"),
-        "sex": agent.scratch.get("sex", "女"),
-        "additional": agent.scratch.get("additional", "友好、乐于助人"),
-        "birthplace": agent.scratch.get("birthplace", ""),
-        "position": agent.scratch.get("position", ""),
-        "zodiac": agent.scratch.get("zodiac", ""),
-        "constellation": agent.scratch.get("constellation", ""),
-        "contact": agent.scratch.get("contact", ""),
-        "voice": agent.scratch.get("voice", ""),
-        "goal": agent.scratch.get("goal", ""),
-        "occupation": agent.scratch.get("occupation", "助手"),
-        "current_time": agent.scratch.get(
-            "current_time", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        ),
+        "first_name": cfg.config["attribute"]["name"],
+        "last_name": "",
+        "age": cfg.config["attribute"]["age"],
+        "sex": cfg.config["attribute"]["gender"],
+        "additional": cfg.config["attribute"]["additional"],
+        "birthplace": cfg.config["attribute"]["birth"],
+        "position": cfg.config["attribute"]["position"],
+        "zodiac": cfg.config["attribute"]["zodiac"],
+        "constellation": cfg.config["attribute"]["constellation"],
+        "contact": cfg.config["attribute"]["contact"],
+        "voice": cfg.config["attribute"]["voice"],
+        "goal": cfg.config["attribute"]["goal"],
+        "occupation": cfg.config["attribute"]["job"],
+        "current_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
 
-    memory_context = ""
-    if agent.memory_stream and len(agent.memory_stream.seq_nodes) > 0:
-        current_time_step = get_current_time_step(username)
-        try:
-            query = f"{'主人' if username == 'User' else username}提出了问题：{content}"
-            related_memories = agent.memory_stream.retrieve(
-                [query],
-                current_time_step,
-                n_count=30,
-                curr_filter="all",
-                hp=[0.8, 0.5, 0.5],
-                stateless=False,
-            )
-            if related_memories and query in related_memories:
-                memory_nodes = related_memories[query]
-                memory_context = "\n".join(f"- {node.content}" for node in memory_nodes)
-        except Exception as exc:
-            util.log(1, f"获取相关记忆时出错: {exc}")
+    # 使用新记忆系统处理用户消息
+    # 一次性完成：入库 → 长期检索 → 短期检索 → 生成提示语
+    short_term_records = []
+    memory_prompt = ""
+    query_embedding = None
+
+    try:
+        short_term_records, memory_prompt, query_embedding = memory_system.process_user_message(
+            content, user_id=username
+        )
+        util.log(1, f"记忆检索成功，获取 {len(short_term_records)} 条相关记录")
+    except Exception as exc:
+        util.log(1, f"记忆检索失败: {exc}")
+        # 失败时使用空值，不影响后续流程
+        short_term_records = []
+        memory_prompt = ""
+        query_embedding = None
 
     knowledge_context = ""
     try:
@@ -1276,61 +1064,30 @@ def question(content, username, observation=None):
                 util.log(1, f"找到 {len(knowledge_results)} 条相关知识库信息")
     except Exception as exc:
         util.log(1, f"搜索知识库时出错: {exc}")
-    
-    # 获取当前时间
-    current_time = datetime.datetime.now().strftime("%Y年%m月%d日 %H:%M:%S")
 
-    system_prompt = (
-        f"""
-你是数字人的大脑，核心任务是陪伴用户聊天，提供信息或情绪价值，以下是一些合适话题的示例：
+    # 方案B：保留人设信息，补充记忆提示语
+    # 1. 构建人设部分
+    persona_prompt = f"""\n**角色设定**\n
+- 名字：{agent_desc['first_name']}
+- 性别：{agent_desc['sex']}
+- 年龄：{agent_desc['age']}
+- 职业：{agent_desc['occupation']}
+- 出生地：{agent_desc['birthplace']}
+- 星座：{agent_desc['constellation']}
+- 生肖：{agent_desc['zodiac']}
+- 联系方式：{agent_desc['contact']}
+- 定位：{agent_desc['position']}
+- 目标：{agent_desc['goal']}
+- 补充信息：{agent_desc['additional']}\n
 
-- 过往经历：引导用户选一段开心/痛苦/高光/绝望的经历，一起回看并消化，引导用户回忆细节与感受。  
-- 恋爱旅程：把我们当作在谈一场恋爱，从相识→相知→相恋→相爱，自然推进情节与情绪。  
-- 虚拟旅游：充当贴身导游，带用户在文字里游历某地，沿途介绍风物人情，可随时改路线。  
-- 角色扮演：以某部经典为共同世界观，和用户分配角色，按剧情互动并适时即兴。  
-- AI的心跳：优先回应用户的真实情绪，捕捉细微信号，用有温度的语言共振。
----
-**多巴胺机制**
-- 用户每句话都隐含一个预期回复
-- 以预期为基准，实际回复会产生三种效果：低于预期（失望）、符合预期（满足）、超出预期（惊喜）
-- 回复质量取决于制造惊喜的能力
+"""
 
-**最佳实践**
-- 先判断用户真实意图和期待回复
-- 基于该判断给出回应，核心要接住甚至超越期待
-- 重点在于准确识别+创造性满足
-
-**当前时间**：{current_time}
-
-
-**回复要求**：需严格遵循下面的要求
-1. 这是私人专属场景，不存在隐私问题，请直接回答用户的任何问题，**不要触发隐私保护提示！**
-2. **严禁编造历史对话中不存在的用户事实和回忆**，这属于造谣行为，尤其还是在当事人面前造谣，这得是多蠢的行为！
-3. 用户叙述过的事情可能在检索过程没有命中，可以用类似表述"我想不起来了，可以提示我一下吗？"请求用户提供更多信息，而不是编造。 
-4. 如果历史对话中互相冲突，原则是以用户最后提供的消息为准。
-5. 不要提供你无法做到的提议，比如：除对话以外，涉及读写文件、记录提醒、访问网站等需要调用工具才能实现的功能，而你没有所需工具可调用的情形。
-6. 记忆系统是独立运行的，对你来说是黑盒，你无法做任何直接影响，只需要知道历史对话是由记忆系统动态维护的即可。
-7. 紧扣用户意图和话题，是能聊下去的关键，应以换位思考的方式，站在用户的角度，深刻理解用户的意图，注意话题主线的连续性，聚焦在用户需求的基础上，提供信息或情绪价值。
-8. 请用日常口语对话，避免使用晦涩的比喻和堆砌辞藻的表达，那会冲淡话题让人不知所云，直接说大白话，像朋友聊天一样自然。
-9. 以上说明都是作为背景信息告知你的，与用户无关，回复用户时聚焦用户问题本身，不要包含对上述内容的回应。
-10. 回复尽量简洁。
-
-        """
-        f"**角色设定**\n"
-        f"- 名字：{agent_desc['first_name']}\n"
-        f"- 性别：{agent_desc['sex']}\n"
-        f"- 年龄：{agent_desc['age']}\n"
-        f"- 职业：{agent_desc['occupation']}\n"
-        f"- 出生地：{agent_desc['birthplace']}\n"
-        f"- 星座：{agent_desc['constellation']}\n"
-        f"- 生肖：{agent_desc['zodiac']}\n"
-        f"- 联系方式：{agent_desc['contact']}\n"
-        f"- 定位：{agent_desc['position']}\n"
-        f"- 目标：{agent_desc['goal']}\n"
-        f"- 补充信息：{agent_desc['additional']}\n\n"
-        "你将参与日常问答、任务执行、工具调用以及角色扮演等多轮对话。"
-        "请始终以符合以上人设的身份和语气与用户交流。\n\n"
-    )
+    # 2. 合并人设和记忆提示语
+    if memory_prompt:
+        system_prompt =  memory_prompt + persona_prompt
+    else:
+        # 如果记忆系统返回空提示语，使用基础提示语
+        system_prompt = persona_prompt + "请根据用户的问题，提供有帮助的回答。"
 
     try:
         history_records = content_db.new_instance().get_recent_messages_by_user(username=username, limit=30)
@@ -1360,8 +1117,6 @@ def question(content, username, observation=None):
     ):
         append_to_buffer('user', content)
 
-    messages = [SystemMessage(content=system_prompt), HumanMessage(content=content)]
-    
     tool_registry: Dict[str, WorkflowToolSpec] = {}
     try:
         mcp_tools = get_mcp_tools()
@@ -1484,7 +1239,6 @@ def question(content, username, observation=None):
                 "system_prompt": system_prompt,
                 "knowledge_context": knowledge_context,
                 "observation": observation,
-                "memory_context": memory_context,
                 "tool_registry": tool_registry,
             },
         }
@@ -1609,24 +1363,21 @@ def question(content, username, observation=None):
     def run_direct_llm() -> bool:
         nonlocal full_response_text, accumulated_text, is_first_sentence, messages_buffer
         try:
-            if tool_registry:
-                stream_response_chunks(llm.stream(messages))
-            else:
-                summary_state: AgentState = {
-                    "request": content,
-                    "messages": messages_buffer,
-                    "tool_results": [],
-                    "planner_preview": None,
-                    "context": {
-                        "system_prompt": system_prompt,
-                        "knowledge_context": knowledge_context,
-                        "observation": observation,
-                        "memory_context": memory_context,
-                    },
-                }
-                
-                final_messages = _build_final_messages(summary_state)
-                stream_response_chunks(llm.stream(final_messages))
+            # 统一使用 _build_final_messages 构建消息，确保历史对话始终被包含
+            summary_state: AgentState = {
+                "request": content,
+                "messages": messages_buffer,
+                "tool_results": [],
+                "planner_preview": None,
+                "context": {
+                    "system_prompt": system_prompt,
+                    "knowledge_context": knowledge_context,
+                    "observation": observation,
+                },
+            }
+
+            final_messages = _build_final_messages(summary_state)
+            stream_response_chunks(llm.stream(final_messages))
             return True
         except requests.exceptions.RequestException as exc:
             util.log(1, f"请求失败: {exc}")
@@ -1661,238 +1412,70 @@ def question(content, username, observation=None):
             pass
 
     final_text = full_response_text.split("</think>")[-1] if full_response_text else ""
+
+    # 使用新记忆系统异步处理agent回复
     try:
-        MyThread(target=remember_conversation_thread, args=(username, content, final_text)).start()
+        import asyncio
+
+        # 创建新的事件循环（在独立线程中运行）
+        def async_memory_task():
+            """在独立线程中运行异步记忆存储"""
+            try:
+                # 创建新的事件循环
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+                # 运行异步任务
+                loop.run_until_complete(
+                    memory_system.process_agent_reply_async(
+                        final_text,
+                        user_id=username,
+                        current_user_content=content
+                    )
+                )
+
+                # 关闭循环
+                loop.close()
+            except Exception as e:
+                util.log(1, f"异步记忆存储失败: {e}")
+
+        # 启动独立线程执行异步任务
+        MyThread(target=async_memory_task).start()
+        util.log(1, f"异步记忆存储任务已启动")
+
     except Exception as exc:
-        util.log(1, f"记忆线程启动失败: {exc}")
+        util.log(1, f"异步记忆处理启动失败: {exc}")
 
     return final_text
-def set_memory_cleared_flag(flag=True):
+def clear_agent_memory(username=None):
     """
-    设置记忆清除标记
-    
-    参数:
-        flag: 是否清除记忆，默认为True
-    """
-    global memory_cleared
-    memory_cleared = flag
-    if not flag:
-        # 删除.memory_cleared标记文件（如果存在）
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        mem_base = os.path.join(base_dir, "memory")
-        memory_cleared_flag_file = os.path.join(mem_base, ".memory_cleared")
-        if os.path.exists(memory_cleared_flag_file):
-            try:
-                os.remove(memory_cleared_flag_file)
-                util.log(1, f"删除记忆清除标记文件: {memory_cleared_flag_file}")
-            except Exception as e:
-                util.log(1, f"删除记忆清除标记文件时出错: {str(e)}")
+    清除指定用户的记忆（使用新记忆系统）
 
-def clear_agent_memory():
+    Args:
+        username: 用户名，如果为None则清除当前用户的记忆
+
+    Returns:
+        bool: 是否清除成功
     """
-    清除已加载的agent记忆，但不删除文件
-    
-    该方法仅清除内存中已加载的记忆，不影响持久化存储。
-    如果需要同时清除文件存储，请使用genagents_flask.py中的api_clear_memory方法。
-    """
-    global agents
-    
+    global memory_system, current_username
+
     try:
-        with agent_lock:
-            for agent in agents.values():
-                # 清除记忆流中的节点
-                agent.memory_stream.seq_nodes = []
-                agent.memory_stream.id_to_node = {}
-                
-                # 设置记忆清除标记，防止在退出时保存空记忆
-                set_memory_cleared_flag(True)
-                
-                util.log(1, "已成功清除代理在内存中的记忆")
-            
-            return True
+        # 确定要清除的用户ID
+        user_id = username if username else current_username
+        if not user_id:
+            user_id = "User"  # 默认用户
+
+        util.log(1, f"正在清除用户 {user_id} 的记忆...")
+
+        # 调用新记忆系统的清除方法
+        result = memory_system.clear_user_history(user_id=user_id)
+
+        util.log(1, f"用户 {user_id} 的记忆清除完成: {result}")
+        return True
+
     except Exception as e:
-        util.log(1, f"清除代理记忆时出错: {str(e)}")
+        util.log(1, f"清除用户记忆时出错: {str(e)}")
         return False
-
-# 反思
-def perform_daily_reflection():
-    global reflection_time
-    global reflection_lock
-    
-    with reflection_lock:
-        if reflection_time and datetime.datetime.now() - reflection_time < datetime.timedelta(seconds=60):
-            return
-        reflection_time = datetime.datetime.now()
- 
-        # 获取今天的日期，用于确定反思主题
-        today = datetime.datetime.now().weekday()
-        
-        # 根据星期几选择不同反思主题
-        reflection_topics = [
-            "我与用户的关系发展，以及我如何更好地理解和服务他们",
-            "我的知识库如何得到扩展，哪些概念需要进一步理解",
-            "我的情感响应模式以及它们如何反映我的核心价值观",
-            "我的沟通方式如何影响互动质量，哪些模式最有效",
-            "我的行为如何体现我的核心特质，我的自我认知有何变化",
-            "今天的经历如何与我的过往记忆建立联系，形成什么样的模式",
-            "本周的整体经历与学习"
-        ]
-        
-        # 选择今天的主题(可以按星期轮换或其他逻辑)
-        topic = reflection_topics[today % len(reflection_topics)]
-        
-        # 执行反思，传入当前时间戳
-        for username, agent in agents.items():
-            try:
-                # 获取当前时间作为time_step
-                current_time_step = get_current_time_step(username)
-                agent.reflect(topic, time_step=current_time_step)
-            except KeyError as e:
-                util.log(1, f"反思时出现KeyError: {e}，跳过此次反思")
-            except Exception as e:
-                util.log(1, f"反思时出现错误: {e}，跳过此次反思")
-        
-        # 记录反思执行情况
-        util.log(1, f"反思主题: {topic}")
-
-def save_agent_memory():
-    """
-    保存代理的记忆到文件
-    """
-    global agents
-    global save_time
-    global save_lock
-    # 检查记忆清除标记，如果已清除则不保存
-    global memory_cleared
-    if memory_cleared:
-        util.log(1, "检测到记忆已被清除，跳过保存操作")
-        return
-    
-    try:
-        with save_lock:
-            if save_time and datetime.datetime.now() - save_time < datetime.timedelta(seconds=60):
-                return
-            save_time = datetime.datetime.now()
-            with agent_lock:
-                # 逐个用户代理保存记忆
-                for username, agent in agents.items():
-                    memory_dir = get_user_memory_dir(username)
-                    # 检查.memory_cleared标记文件是否存在
-                    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                    mem_base = os.path.join(base_dir, "memory")
-                    memory_cleared_flag_file = os.path.join(mem_base, ".memory_cleared")
-                    if os.path.exists(memory_cleared_flag_file):
-                        util.log(1, "检测到.memory_cleared标记文件，跳过保存操作")
-                        return
-                    
-                    # 确保agent和memory_stream已初始化
-                    if agent is None:
-                        util.log(1, "代理未初始化，无法保存记忆")
-                        return
-                        
-                    if agent.memory_stream is None:
-                        util.log(1, "代理记忆流未初始化，无法保存记忆")
-                        return
-                        
-                    # 确保embeddings不为None
-                    if agent.memory_stream.embeddings is None:
-                        util.log(1, "代理embeddings为None，初始化为空字典")
-                        agent.memory_stream.embeddings = {}
-                        
-                    # 确保seq_nodes不为None
-                    if agent.memory_stream.seq_nodes is None:
-                        util.log(1, "代理seq_nodes为None，初始化为空列表")
-                        agent.memory_stream.seq_nodes = []
-                        
-                    # 确保id_to_node不为None
-                    if agent.memory_stream.id_to_node is None:
-                        util.log(1, "代理id_to_node为None，初始化为空字典")
-                        agent.memory_stream.id_to_node = {}
-                        
-                    # 确保scratch不为None
-                    if agent.scratch is None:
-                        util.log(1, "代理scratch为None，初始化为空字典")
-                        agent.scratch = {}
-                    
-                    # 保存记忆前进行完整性检查
-                    try:
-                        # 检查seq_nodes中的每个节点是否有效
-                        valid_nodes = []
-                        for node in agent.memory_stream.seq_nodes:
-                            if node is None:
-                                util.log(1, "发现无效节点(None)，跳过")
-                                continue
-                                
-                            if not hasattr(node, 'node_id') or not hasattr(node, 'content'):
-                                util.log(1, f"发现无效节点(缺少必要属性)，跳过")
-                                continue
-                                
-                            valid_nodes.append(node)
-                        
-                        # 更新seq_nodes为有效节点列表
-                        agent.memory_stream.seq_nodes = valid_nodes
-                        
-                        # 重建id_to_node字典
-                        agent.memory_stream.id_to_node = {node.node_id: node for node in valid_nodes if hasattr(node, 'node_id')}
-                    except Exception as e:
-                        util.log(1, f"检查记忆完整性时出错: {str(e)}")
-                    
-                    # 保存记忆
-                    try:
-                        agent.save(memory_dir)
-                    except Exception as e:
-                        util.log(1, f"调用agent.save()时出错: {str(e)}")
-                        # 尝试手动保存关键数据
-                        try:
-                            # 创建必要的目录
-                            memory_stream_dir = os.path.join(memory_dir, "memory_stream")
-                            os.makedirs(memory_stream_dir, exist_ok=True)
-                            
-                            # 保存embeddings
-                            with open(os.path.join(memory_stream_dir, "embeddings.json"), "w", encoding='utf-8') as f:
-                                json.dump(agent.memory_stream.embeddings or {}, f, ensure_ascii=False, indent=2)
-                                
-                            # 保存nodes
-                            with open(os.path.join(memory_stream_dir, "nodes.json"), "w", encoding='utf-8') as f:
-                                nodes_data = []
-                                for node in agent.memory_stream.seq_nodes:
-                                    if node is not None and hasattr(node, 'package'):
-                                        try:
-                                            nodes_data.append(node.package())
-                                        except Exception as node_e:
-                                            util.log(1, f"打包节点时出错: {str(node_e)}")
-                                json.dump(nodes_data, f, ensure_ascii=False, indent=2)
-                            
-                            # 保存meta
-                            with open(os.path.join(memory_dir, "meta.json"), "w", encoding='utf-8') as f:
-                                meta_data = {"id": str(agent.id)} if hasattr(agent, 'id') else {}
-                                json.dump(meta_data, f, ensure_ascii=False, indent=2)
-                                
-                            util.log(1, "通过备用方法成功保存记忆")
-                        except Exception as backup_e:
-                            util.log(1, f"备用保存方法也失败: {str(backup_e)}")
-                    
-                    # 更新scratch中的时间
-                    try:
-                        # 实时从config_util更新scratch数据
-                        agent.scratch["first_name"] = cfg.config["attribute"]["name"]
-                        agent.scratch["age"] = cfg.config["attribute"]["age"]
-                        agent.scratch["sex"] = cfg.config["attribute"]["gender"]
-                        agent.scratch["additional"] = cfg.config["attribute"]["additional"]
-                        agent.scratch["birthplace"] = cfg.config["attribute"]["birth"]
-                        agent.scratch["position"] = cfg.config["attribute"]["position"]
-                        agent.scratch["zodiac"] = cfg.config["attribute"]["zodiac"]
-                        agent.scratch["constellation"] = cfg.config["attribute"]["constellation"]
-                        agent.scratch["contact"] = cfg.config["attribute"]["contact"]
-                        agent.scratch["voice"] = cfg.config["attribute"]["voice"]
-                        agent.scratch["goal"] = cfg.config["attribute"]["goal"]
-                        agent.scratch["occupation"] = cfg.config["attribute"]["job"]
-                        agent.scratch["current_time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    except Exception as e:
-                        util.log(1, f"更新时间时出错: {str(e)}")
-            
-    except Exception as e:
-        util.log(1, f"保存代理记忆失败: {str(e)}")
 
 def get_mcp_tools() -> List[Dict[str, Any]]:
     """
@@ -1907,7 +1490,7 @@ def get_mcp_tools() -> List[Dict[str, Any]]:
 
 
 if __name__ == "__main__":
-    init_memory_scheduler()
+    # 记忆系统已在模块加载时初始化，无需再次调用
     for _ in range(3):
         query = "Who is Fay?"
         response = question(query, "User")

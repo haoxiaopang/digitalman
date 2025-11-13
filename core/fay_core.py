@@ -24,7 +24,6 @@ from core import qa_service
 from utils import config_util as cfg
 from core import content_db
 from ai_module import nlp_cemotion
-from llm import nlp_cognitive_stream
 from core import stream_manager
 
 from core import member_db
@@ -191,7 +190,14 @@ class FeiFei:
                         if wsa_server.get_instance().is_connected(username):
                             content = {'Topic': 'human', 'Data': {'Key': 'log', 'Value': "思考中..."}, 'Username' : username, 'robot': f'{cfg.fay_url}/robot/Thinking.jpg'}
                             wsa_server.get_instance().add_cmd(content)
-                        text = nlp_cognitive_stream.question(interact.data["msg"], username, interact.data.get("observation", None))
+
+                        # 根据配置动态调用不同的NLP模块
+                        if cfg.config["memory"].get("use_bionic_memory", False):
+                            from llm import nlp_bionicmemory_stream
+                            text = nlp_bionicmemory_stream.question(interact.data["msg"], username, interact.data.get("observation", None))
+                        else:
+                            from llm import nlp_cognitive_stream
+                            text = nlp_cognitive_stream.question(interact.data["msg"], username, interact.data.get("observation", None))
 
                     else: 
                         text = answer
@@ -346,9 +352,9 @@ class FeiFei:
                 user_for_stop = interact.data.get("user", "User")
                 conv_id_for_stop = interact.data.get("conversation_id")
                 if is_end or not stream_manager.new_instance().should_stop_generation(user_for_stop, conversation_id=conv_id_for_stop):
-                    self.__process_text_output(text, interact.data.get('user'), uid, content_id, type)
+                    self.__process_text_output(text, interact.data.get('user'), uid, content_id, type, is_first, is_end)
             except Exception:
-                self.__process_text_output(text, interact.data.get('user'), uid, content_id, type)
+                self.__process_text_output(text, interact.data.get('user'), uid, content_id, type, is_first, is_end)
             
             # 处理think标签
             # 第一步：处理结束标记</think>
@@ -397,7 +403,7 @@ class FeiFei:
             if audio_url is not None:#透传音频下载
                 file_name = 'sample-' + str(int(time.time() * 1000)) + audio_url[-4:]
                 result = self.download_wav(audio_url, './samples/', file_name)
-            elif config_util.config["interact"]["playSound"] or wsa_server.get_instance().is_connected(interact.data.get("user")) or self.__is_send_remote_device_audio(interact):#tts
+            elif config_util.config["interact"]["playSound"] or wsa_server.get_instance().get_client_output(interact.data.get("user")) or self.__is_send_remote_device_audio(interact):#tts
                 if text != None and text.replace("*", "").strip() != "":
                     # 检查是否需要停止TTS处理（按会话）
                     if stream_manager.new_instance().should_stop_generation(
@@ -593,7 +599,7 @@ class FeiFei:
                 MyThread(target=self.__send_remote_device_audio, args=[file_url, interact]).start()       
 
             #发送音频给数字人接口
-            if file_url is not None and wsa_server.get_instance().is_connected(interact.data.get("user")):
+            if file_url is not None and wsa_server.get_instance().get_client_output(interact.data.get("user")):
                 content = {'Topic': 'human', 'Data': {'Key': 'audio', 'Value': os.path.abspath(file_url), 'HttpValue': f'{cfg.fay_url}/audio/' + os.path.basename(file_url),  'Text': text, 'Time': audio_length, 'Type': interact.interleaver, 'IsFirst': 1 if interact.data.get("isfirst", False) else 0,  'IsEnd': 1 if interact.data.get("isend", False) else 0, 'CONV_ID' : self.user_conv_map[interact.data.get("user", "User")]["conversation_id"], 'CONV_MSG_NO' : self.user_conv_map[interact.data.get("user", "User")]["conversation_msg_no"]  }, 'Username' : interact.data.get('user'), 'robot': f'{cfg.fay_url}/robot/Speaking.jpg'}
                 #计算lips
                 if platform.system() == "Windows":
@@ -698,11 +704,13 @@ class FeiFei:
                 "Username": username
             })
 
-    def __send_digital_human_message(self, text, username):
+    def __send_digital_human_message(self, text, username, is_first=False, is_end=False):
         """
         发送消息到数字人（语音应该在say方法驱动数字人输出）
         :param text: 消息文本
         :param username: 用户名
+        :param is_first: 是否是第一段文本
+        :param is_end: 是否是最后一段文本
         """
         full_text = self.__remove_emojis(text.replace("*", ""))
         if wsa_server.get_instance().is_connected(username):
@@ -710,13 +718,15 @@ class FeiFei:
                 'Topic': 'human',
                 'Data': {
                     'Key': 'text',
-                    'Value': full_text
+                    'Value': full_text,
+                    'IsFirst': 1 if is_first else 0,
+                    'IsEnd': 1 if is_end else 0
                 },
                 'Username': username
             }
             wsa_server.get_instance().add_cmd(content)
 
-    def __process_text_output(self, text, username, uid, content_id, type):
+    def __process_text_output(self, text, username, uid, content_id, type, is_first=False, is_end=False):
         """
         完整文本输出到各个终端
         :param text: 主要回复文本
@@ -724,6 +734,8 @@ class FeiFei:
         :param username: 用户名
         :param uid: 用户ID
         :param type: 消息类型
+        :param is_first: 是否是第一段文本
+        :param is_end: 是否是最后一段文本
         """
         if text:
             text = text.strip()
@@ -733,7 +745,7 @@ class FeiFei:
         
         # 发送主回复到面板和数字人
         self.__send_panel_message(text, username, uid, content_id, type)
-        self.__send_digital_human_message(text, username)
+        self.__send_digital_human_message(text, username, is_first, is_end)
         
         # 打印日志
         util.printInfo(1, username, '({}) {}'.format("llm", text))
