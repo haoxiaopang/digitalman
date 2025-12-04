@@ -215,18 +215,41 @@ class FayInterface {
           // 拼接新内容到现有内容
           existingMessage.content = existingMessage.content + data.panelReply.content;
           existingMessage.timetext = this.getTime();
+
+          // 检测 think 标签状态
+          const hasThinkStart = existingMessage.content.includes('<think>');
+          const hasThinkEnd = existingMessage.content.includes('</think>');
+          if (hasThinkStart && !hasThinkEnd) {
+            // think 正在接收中，展开并显示加载状态
+            vueInstance.$set(existingMessage, 'thinkExpanded', true);
+            vueInstance.$set(existingMessage, 'thinkLoading', true);
+          } else if (hasThinkStart && hasThinkEnd) {
+            // think 接收完成，关闭加载状态
+            vueInstance.$set(existingMessage, 'thinkLoading', false);
+          }
+
           // 强制更新视图
           vueInstance.$forceUpdate();
         } else {
           // 添加新消息
-          vueInstance.messages.push({
+          const newMessage = {
             id: data.panelReply.id,
             username: data.panelReply.username,
             content: data.panelReply.content,
             type: data.panelReply.type,
             timetext: this.getTime(),
-            is_adopted: data.panelReply.is_adopted ? 1 : 0
-          });
+            is_adopted: data.panelReply.is_adopted ? 1 : 0,
+            thinkExpanded: false,
+            thinkLoading: false
+          };
+
+          // 检测新消息是否包含 think 开始标签
+          if (newMessage.content.includes('<think>') && !newMessage.content.includes('</think>')) {
+            newMessage.thinkExpanded = true;
+            newMessage.thinkLoading = true;
+          }
+
+          vueInstance.messages.push(newMessage);
         }
 
         // 滚动到底部
@@ -280,24 +303,7 @@ new Vue({
     };
   },
   watch: {
-    messages: {
-      handler(newMessages) {
-        for (let i = newMessages.length - 1; i >= 0; i--) {
-          let msg = newMessages[i];
-          if (msg.type === 'fay') {
-            const regex = /<think>([\s\S]*?)<\/think>/;
-            const match = msg.content.match(regex);
-            if (match && match[1]) {
-              this.thinkContent = match[1];
-              // 从原始消息中移除think标签及其内容，并去除多余空格
-              msg.content = msg.content.replace(regex, '').trim();
-              break;
-            }
-          }
-        }
-      },
-      deep: true
-    }
+    // 消息列表变化时的监听（保留用于其他扩展）
   },
   created() {
     this.initFayService(); 
@@ -549,7 +555,7 @@ this.fayService.fetchData(`${this.base_url}/api/adopt-msg`, {
       message: response.msg,  // 显示成功消息
       type: 'success',
     });
-    
+
     this.loadMessageHistory(this.selectedUser[1], 'adopt');
   } else {
     // 处理失败的响应
@@ -568,12 +574,106 @@ this.fayService.fetchData(`${this.base_url}/api/adopt-msg`, {
     type: 'error',
   });
 });
+},
+
+// 取消采纳
+unadoptText(id) {
+  this.fayService.fetchData(`${this.base_url}/api/unadopt-msg`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ id })
+  })
+  .then((response) => {
+    if (response && response.status === 'success') {
+      this.$notify({
+        title: '成功',
+        message: response.msg,
+        type: 'success',
+      });
+
+      // 更新本地消息列表中所有相关消息的采纳状态
+      if (response.unadopted_ids && response.unadopted_ids.length > 0) {
+        this.messages.forEach(msg => {
+          if (response.unadopted_ids.includes(msg.id)) {
+            msg.is_adopted = 0;
+          }
+        });
+      }
+    } else {
+      this.$notify({
+        title: '失败',
+        message: response ? response.msg : '请求失败',
+        type: 'error',
+      });
+    }
+  })
+  .catch((error) => {
+    this.$notify({
+      title: '错误',
+      message: error.message || '请求失败',
+      type: 'error',
+    });
+  });
 }
 ,
   minimizeThinkPanel() {
     this.isThinkPanelMinimized = !this.isThinkPanelMinimized;
     const panel = document.querySelector('.think-panel');
     panel.classList.toggle('minimized');
+  },
+
+  // 解析消息中的 think 内容
+  parseThinkContent(content) {
+    if (!content) {
+      return { thinkContent: '', mainContent: '' };
+    }
+
+    // 先尝试匹配完整的 think 标签
+    const completeRegex = /<think>([\s\S]*?)<\/think>/i;
+    const completeMatch = content.match(completeRegex);
+
+    if (completeMatch && completeMatch[1]) {
+      // 完整的 think 标签
+      const rawThink = completeMatch[1];
+      const thinkContent = this.trimThinkLines(rawThink);
+      const mainContent = content.replace(completeRegex, '').replace(/^\s+/, '').replace(/\s+$/, '');
+      return { thinkContent, mainContent };
+    }
+
+    // 尝试匹配未完成的 think 标签（只有开始标签）
+    const incompleteRegex = /<think>([\s\S]*)/i;
+    const incompleteMatch = content.match(incompleteRegex);
+
+    if (incompleteMatch && incompleteMatch[1]) {
+      // 未完成的 think 标签，正在接收中
+      const rawThink = incompleteMatch[1];
+      const thinkContent = this.trimThinkLines(rawThink);
+      const mainContent = ''; // 正在思考中，主内容为空
+      return { thinkContent, mainContent };
+    }
+
+    return { thinkContent: '', mainContent: content.replace(/^\s+/, '').replace(/\s+$/, '') };
+  },
+
+  // 处理 think 内容的每行 trim
+  trimThinkLines(rawThink) {
+    const lines = rawThink.split(/\r?\n/);
+    const trimmedLines = [];
+    for (let i = 0; i < lines.length; i++) {
+      const trimmed = lines[i].replace(/^\s+/, '').replace(/\s+$/, '');
+      if (trimmed.length > 0) {
+        trimmedLines.push(trimmed);
+      }
+    }
+    return trimmedLines.join('\n');
+  },
+
+  // 切换 think 内容的展开/折叠状态
+  toggleThink(index) {
+    const message = this.messages[index];
+    this.$set(message, 'thinkExpanded', !message.thinkExpanded);
   },
   
   // 检查MCP服务器状态
