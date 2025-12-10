@@ -454,7 +454,7 @@ def gpt_stream_response(last_content, username):
             if sentence is None:
                 gsleep(0.01)
                 continue
-            
+
             # 跳过非当前会话
             try:
                 m = re.search(r"__<cid=([^>]+)>__", sentence)
@@ -468,6 +468,8 @@ def gpt_stream_response(last_content, username):
             is_first = "_<isfirst>" in sentence
             is_end = "_<isend>" in sentence
             content = sentence.replace("_<isfirst>", "").replace("_<isend>", "").replace("_<isqa>", "")
+            # 移除 prestart 标签及其内容，不返回给API调用方
+            content = re.sub(r'<prestart>[\s\S]*?</prestart>', '', content, flags=re.IGNORECASE)
             if content or is_first or is_end:  # 只有当有实际内容时才发送
                 message = {
                     "id": "faystreaming-" + str(uuid.uuid4()),
@@ -485,7 +487,7 @@ def gpt_stream_response(last_content, username):
                     ],
                     #TODO 这里的token计算方式需要优化
                     "usage": {
-                        "prompt_tokens": len(last_content) if is_first else 0, 
+                        "prompt_tokens": len(last_content) if is_first else 0,
                         "completion_tokens": len(content),
                         "total_tokens": len(last_content) + len(content)
                     },
@@ -496,7 +498,7 @@ def gpt_stream_response(last_content, username):
                 break
             gsleep(0.01)
         yield 'data: [DONE]\n\n'
-    
+
     return Response(generate(), mimetype='text/event-stream')
 
 # 处理非流式响应
@@ -510,7 +512,7 @@ def non_streaming_response(last_content, username):
         if sentence is None:
             gsleep(0.01)
             continue
-        
+
         # 跳过非当前会话
         try:
             m = re.search(r"__<cid=([^>]+)>__", sentence)
@@ -526,6 +528,8 @@ def non_streaming_response(last_content, username):
         text += sentence.replace("_<isfirst>", "").replace("_<isend>", "").replace("_<isqa>", "")
         if is_end:
             break
+    # 移除 prestart 标签及其内容，不返回给API调用方
+    text = re.sub(r'<prestart>[\s\S]*?</prestart>', '', text, flags=re.IGNORECASE)
     return jsonify({
         "id": "fay-" + str(uuid.uuid4()),
         "object": "chat.completion",
@@ -544,7 +548,7 @@ def non_streaming_response(last_content, username):
         ],
         #TODO 这里的token计算方式需要优化
         "usage": {
-            "prompt_tokens": len(last_content), 
+            "prompt_tokens": len(last_content),
             "completion_tokens": len(text),
             "total_tokens": len(last_content) + len(text)
         },
@@ -878,6 +882,63 @@ def api_start_genagents():
     except Exception as e:
         util.log(1, f"启动决策分析页面时出错: {str(e)}")
         return jsonify({'success': False, 'message': f'启动决策分析页面时出错: {str(e)}'}), 500
+
+# 获取本地图片（用于在网页中显示本地图片）
+@__app.route('/api/local-image')
+def api_local_image():
+    try:
+        file_path = request.args.get('path', '')
+        if not file_path:
+            return jsonify({'error': '缺少文件路径参数'}), 400
+
+        # 检查文件是否存在
+        if not os.path.exists(file_path):
+            return jsonify({'error': f'文件不存在: {file_path}'}), 404
+
+        # 检查是否为图片文件
+        valid_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp')
+        if not file_path.lower().endswith(valid_extensions):
+            return jsonify({'error': '不是有效的图片文件'}), 400
+
+        # 返回图片文件
+        return send_file(file_path)
+    except Exception as e:
+        return jsonify({'error': f'获取图片时出错: {str(e)}'}), 500
+
+# 打开图片文件（使用系统默认程序）
+@__app.route('/api/open-image', methods=['POST'])
+def api_open_image():
+    try:
+        data = request.get_json()
+        if not data or 'path' not in data:
+            return jsonify({'success': False, 'message': '缺少文件路径参数'}), 400
+
+        file_path = data['path']
+
+        # 检查文件是否存在
+        if not os.path.exists(file_path):
+            return jsonify({'success': False, 'message': f'文件不存在: {file_path}'}), 404
+
+        # 检查是否为图片文件
+        valid_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp')
+        if not file_path.lower().endswith(valid_extensions):
+            return jsonify({'success': False, 'message': '不是有效的图片文件'}), 400
+
+        # 使用系统默认程序打开图片
+        import subprocess
+        import platform
+
+        system = platform.system()
+        if system == 'Windows':
+            os.startfile(file_path)
+        elif system == 'Darwin':  # macOS
+            subprocess.run(['open', file_path])
+        else:  # Linux
+            subprocess.run(['xdg-open', file_path])
+
+        return jsonify({'success': True, 'message': '已打开图片'}), 200
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'打开图片时出错: {str(e)}'}), 500
 
 def run():
     class NullLogHandler:
