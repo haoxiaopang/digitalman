@@ -326,6 +326,12 @@ new Vue({
       isThinkPanelMinimized: false,
       mcpOnlineStatus: false,
       mcpCheckTimer: null,
+      systemStatus: {
+        server: false,
+        digital_human: false,
+        remote_audio: false
+      },
+      systemStatusTimer: null,
     };
   },
   watch: {
@@ -337,8 +343,51 @@ new Vue({
     this.startUserListTimer();
     this.checkMcpStatus();
     this.startMcpStatusTimer();
+    this.startSystemStatusTimer();
   },
   methods: {
+    // 检查系统各组件连接状态
+    checkSystemStatus() {
+      let username = '';
+      if (this.selectedUser && this.selectedUser.length > 1) {
+        username = this.selectedUser[1];
+      }
+      
+      const statusUrl = `${this.base_url}/api/get-system-status?username=${encodeURIComponent(username)}`;
+      
+      fetch(statusUrl)
+        .then(response => response.json())
+        .then(data => {
+          this.systemStatus = {
+            server: data.server,
+            digital_human: data.digital_human,
+            remote_audio: data.remote_audio
+          };
+        })
+        .catch(error => {
+          console.warn('获取系统状态失败:', error);
+          this.systemStatus = {
+            server: false,
+            digital_human: false,
+            remote_audio: false
+          };
+        });
+    },
+
+    // 启动系统状态检查定时器
+    startSystemStatusTimer() {
+      // 立即执行一次
+      this.checkSystemStatus();
+      
+      if (this.systemStatusTimer) {
+        clearInterval(this.systemStatusTimer);
+      }
+      // 每3秒检查一次
+      this.systemStatusTimer = setInterval(() => {
+        this.checkSystemStatus();
+      }, 3000);
+    },
+
     initFayService() {
       const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsHost = window.location.hostname;
@@ -480,23 +529,16 @@ new Vue({
     loadUserList() {
       this.fayService.getUserList().then((response) => {
         if (response && response.list) {
-          if (response.list.length == 0){
-            // 检查是否已经有默认用户
-            const defaultUserExists = this.userList.some(user => user[1] === 'User');
-            if (!defaultUserExists) {
-              // 只有在不存在默认用户时才添加
-              const info = [];
-              info[0] = 1;
-              info[1] = 'User';
-              this.userList.push(info);
-              this.selectUser(info);
-              console.log('添加默认用户: User');
-            }
-          } else {
-            this.userList = response.list;
-            if (!this.selectedUser) {
-              this.selectUser(this.userList[0]);
-            }
+          let list = response.list || [];
+          // 始终确保 "User"（主人）存在于列表中
+          const defaultUserExists = list.some(user => user[1] === 'User');
+          if (!defaultUserExists) {
+            // 将主人添加到列表开头
+            list = [[1, 'User'], ...list];
+          }
+          this.userList = list;
+          if (!this.selectedUser) {
+            this.selectUser(this.userList[0]);
           }
         }
       });
@@ -520,6 +562,10 @@ new Vue({
       if (this.mcpCheckTimer) {
         clearInterval(this.mcpCheckTimer);
         this.mcpCheckTimer = null;
+      }
+      if (this.systemStatusTimer) {
+        clearInterval(this.systemStatusTimer);
+        this.systemStatusTimer = null;
       }
     },
     selectUser(user) {
@@ -661,13 +707,13 @@ unadoptText(id) {
     let prestartContent = '';
 
     // 解析 prestart 标签 - 使用贪婪匹配确保匹配到最后一个 </prestart>
-    // 同时支持多个 prestart 标签的情况
-    const prestartRegex = /<prestart>([\s\S]*)<\/prestart>/i;
+    // 同时支持多个 prestart 标签的情况，以及支持属性
+    const prestartRegex = /<prestart(?:[^>]*)>([\s\S]*)<\/prestart>/i;
     const prestartMatch = mainContent.match(prestartRegex);
     if (prestartMatch && prestartMatch[1]) {
       prestartContent = this.trimThinkLines(prestartMatch[1]);
       // 移除所有 prestart 标签及其内容
-      mainContent = mainContent.replace(/<prestart>[\s\S]*<\/prestart>/gi, '');
+      mainContent = mainContent.replace(/<prestart(?:[^>]*)>[\s\S]*<\/prestart>/gi, '');
     }
 
     // 先尝试匹配完整的 think 标签
