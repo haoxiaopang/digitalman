@@ -369,6 +369,26 @@ def start():
     util.log(1, '读取配置...')
     config_util.load_config()
 
+    # 启动阶段预热 embedding 服务（避免首条消息时才初始化维度）
+    try:
+        util.log(1, '启动阶段预热 embedding 服务...')
+        from simulation_engine.gpt_structure import get_text_embedding
+        
+        # 检查服务是否已经初始化
+        from utils.api_embedding_service import get_embedding_service
+        service = get_embedding_service()
+        
+        if hasattr(service, 'embedding_dim') and service.embedding_dim is not None:
+            util.log(1, f'embedding 服务已初始化，维度: {service.embedding_dim}')
+        else:
+            util.log(1, '初始化 embedding 服务维度...')
+            get_text_embedding("dimension_check")
+            util.log(1, f'embedding 服务维度初始化完成: {service.embedding_dim}')
+        
+        util.log(1, 'embedding 服务预热完成')
+    except Exception as e:
+        util.log(1, f'embedding 服务预热失败: {str(e)}')
+
     #开启核心服务
     util.log(1, '开启核心服务...')
     feiFei = get_fay_core().FeiFei()

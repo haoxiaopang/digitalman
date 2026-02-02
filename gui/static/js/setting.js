@@ -255,8 +255,9 @@ new Vue({
             }
             if (config.memory) {
                 this.memory_isolate_by_user = config.memory.isolate_by_user || false;
-                this.use_bionic_memory = config.memory.use_bionic_memory || false;
             }
+            // Bionic memory switch removed from UI; force disabled
+            this.use_bionic_memory = false;
         },
         saveConfig() {
             let url = `${this.host_url}/api/submit`;
@@ -302,7 +303,7 @@ new Vue({
                     },
                     "memory": {
                         "isolate_by_user": this.memory_isolate_by_user,
-                        "use_bionic_memory": this.use_bionic_memory
+                        "use_bionic_memory": false
                     },
                     "items": []
                 }

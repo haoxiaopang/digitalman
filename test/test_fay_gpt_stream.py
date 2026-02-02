@@ -91,7 +91,7 @@ if __name__ == "__main__":
     print("=" * 60)
     print("示例1：张三的对话（带观察数据）")
     print("=" * 60)
-    test_gpt("你好，今天天气不错啊", username="user", observation=OBSERVATION_SAMPLES["张三"])
+    test_gpt(prompt="", username="user", observation=OBSERVATION_SAMPLES["张三"], no_reply=False)
 
     print("\n")
 

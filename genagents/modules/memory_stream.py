@@ -12,6 +12,7 @@ from simulation_engine.settings import *
 from simulation_engine.global_methods import *
 from simulation_engine.gpt_structure import *
 from simulation_engine.llm_json_parser import *
+from utils import util
 
 
 def run_gpt_generate_importance(
@@ -31,7 +32,7 @@ def run_gpt_generate_importance(
     gpt_response = extract_first_json_dict(gpt_response)
     # 处理gpt_response为None的情况
     if gpt_response is None:
-      print("警告: extract_first_json_dict返回None，使用默认值")
+      util.log(2, "警告: extract_first_json_dict返回None，使用默认值")
       return [50]  # 返回默认重要性分数
     return list(gpt_response.values())
 
@@ -172,11 +173,11 @@ def normalize_dict_floats(d, target_min, target_max):
   """
   # 检查字典是否为None或为空
   if d is None:
-    print("警告: normalize_dict_floats接收到None字典")
+    util.log(2, "警告: normalize_dict_floats接收到None字典")
     return {}
   
   if not d:
-    print("警告: normalize_dict_floats接收到空字典")
+    util.log(2, "警告: normalize_dict_floats接收到空字典")
     return {}
   
   try:
@@ -193,7 +194,7 @@ def normalize_dict_floats(d, target_min, target_max):
                   / range_val + target_min)
     return d
   except Exception as e:
-    print(f"normalize_dict_floats处理字典时出错: {str(e)}")
+    util.log(3, f"normalize_dict_floats处理字典时出错: {str(e)}")
     # 返回原始字典，避免处理失败
     return d
 
@@ -238,11 +239,11 @@ def extract_recency(seq_nodes):
   """
   # 检查seq_nodes是否为None或为空
   if seq_nodes is None:
-    print("警告: extract_recency接收到None节点列表")
+    util.log(2, "警告: extract_recency接收到None节点列表")
     return {}
   
   if not seq_nodes:
-    print("警告: extract_recency接收到空节点列表")
+    util.log(2, "警告: extract_recency接收到空节点列表")
     return {}
   
   try:
@@ -250,11 +251,11 @@ def extract_recency(seq_nodes):
     normalized_timestamps = []
     for node in seq_nodes:
       if node is None:
-        print("警告: 节点为None，跳过")
+        util.log(2, "警告: 节点为None，跳过")
         continue
         
       if not hasattr(node, 'last_retrieved'):
-        print(f"警告: 节点 {node} 没有last_retrieved属性，使用默认值0")
+        util.log(2, f"警告: 节点 {node} 没有last_retrieved属性，使用默认值0")
         normalized_timestamps.append(0)
         continue
         
@@ -284,13 +285,13 @@ def extract_recency(seq_nodes):
         recency_out[node.node_id] = (recency_decay
                                     ** (max_timestep - last_retrieved))
       except Exception as e:
-        print(f"计算节点 {node.node_id} 的recency时出错: {str(e)}")
+        util.log(3, f"计算节点 {node.node_id} 的recency时出错: {str(e)}")
         # 使用默认值
         recency_out[node.node_id] = 1.0
   
     return recency_out
   except Exception as e:
-    print(f"extract_recency处理节点列表时出错: {str(e)}")
+    util.log(3, f"extract_recency处理节点列表时出错: {str(e)}")
     # 返回一个默认字典
     return {node.node_id: 1.0 for node in seq_nodes if node is not None and hasattr(node, 'node_id')}
 
@@ -309,22 +310,22 @@ def extract_importance(seq_nodes):
   """
   # 检查seq_nodes是否为None或为空
   if seq_nodes is None:
-    print("警告: extract_importance接收到None节点列表")
+    util.log(2, "警告: extract_importance接收到None节点列表")
     return {}
   
   if not seq_nodes:
-    print("警告: extract_importance接收到空节点列表")
+    util.log(2, "警告: extract_importance接收到空节点列表")
     return {}
   
   try:
     importance_out = dict()
     for count, node in enumerate(seq_nodes): 
       if node is None:
-        print("警告: 节点为None，跳过")
+        util.log(2, "警告: 节点为None，跳过")
         continue
         
       if not hasattr(node, 'node_id') or not hasattr(node, 'importance'):
-        print(f"警告: 节点缺少必要属性，跳过")
+        util.log(2, f"警告: 节点缺少必要属性，跳过")
         continue
         
       # 确保importance是数值类型
@@ -333,16 +334,29 @@ def extract_importance(seq_nodes):
           importance_out[node.node_id] = float(node.importance)
         except ValueError:
           # 如果无法转换为数值，使用默认值
-          print(f"警告: 节点 {node.node_id} 的importance无法转换为数值，使用默认值")
+          util.log(2, f"警告: 节点 {node.node_id} 的importance无法转换为数值，使用默认值")
           importance_out[node.node_id] = 50.0
       else:
         importance_out[node.node_id] = node.importance
   
     return importance_out
   except Exception as e:
-    print(f"extract_importance处理节点列表时出错: {str(e)}")
+    util.log(3, f"extract_importance处理节点列表时出错: {str(e)}")
     # 返回一个默认字典
     return {node.node_id: 50.0 for node in seq_nodes if node is not None and hasattr(node, 'node_id')}
+
+
+def _is_valid_embedding(vec, expected_dim):
+  if vec is None:
+    return False
+  if not isinstance(vec, (list, tuple)):
+    return False
+  if expected_dim is not None and len(vec) != expected_dim:
+    return False
+  for val in vec:
+    if not isinstance(val, (int, float)):
+      return False
+  return True
 
 
 def extract_relevance(seq_nodes, embeddings, focal_pt): 
@@ -360,29 +374,39 @@ def extract_relevance(seq_nodes, embeddings, focal_pt):
   """
   # 确保embeddings不为None
   if embeddings is None:
-    print("警告: embeddings为None，使用空字典代替")
+    util.log(2, "警告: embeddings为None，使用空字典代替")
     embeddings = {}
     
   try:
     focal_embedding = get_text_embedding(focal_pt)
   except Exception as e:
-    print(f"获取焦点嵌入向量时出错: {str(e)}")
+    util.log(3, f"获取焦点嵌入向量时出错: {str(e)}")
     # 如果无法获取嵌入向量，返回默认值
     return {node.node_id: 0.5 for node in seq_nodes}
 
+  expected_dim = len(focal_embedding) if isinstance(focal_embedding, (list, tuple)) else None
   relevance_out = dict()
   for count, node in enumerate(seq_nodes): 
     try:
       # 检查节点内容是否在embeddings中
       if node.content in embeddings:
         node_embedding = embeddings[node.content]
+        if not _is_valid_embedding(node_embedding, expected_dim):
+          # 维度检查与修复在启动阶段完成，这里不再重算，避免首条消息扣时间
+          current_dim = len(node_embedding) if isinstance(node_embedding, (list, tuple)) else "未知"
+          util.log(2, f"检索时发现维度不一致的embedding: 节点ID={node.node_id}, 内容='{node.content[:30]}...', 当前维度={current_dim}, 期望维度={expected_dim}")
+          util.log(2, f"  -> 使用默认相关性分数 0.5 (建议重启系统进行维度修复)")
+          node_embedding = None
         # 计算余弦相似度
-        relevance_out[node.node_id] = cos_sim(node_embedding, focal_embedding)
+        if node_embedding is None:
+          relevance_out[node.node_id] = 0.5
+        else:
+          relevance_out[node.node_id] = cos_sim(node_embedding, focal_embedding)
       else:
         # 如果没有对应的嵌入向量，使用默认值
         relevance_out[node.node_id] = 0.5
     except Exception as e:
-      print(f"计算节点 {node.node_id} 的相关性时出错: {str(e)}")
+      util.log(3, f"计算节点 {node.node_id} 的相关性时出错: {str(e)}")
       # 如果计算过程中出错，使用默认值
       relevance_out[node.node_id] = 0.5
 
@@ -400,6 +424,7 @@ class ConceptNode:
     self.node_type = node_dict["node_type"]
     self.content = node_dict["content"]
     self.importance = node_dict["importance"]
+    self.datetime = node_dict.get("datetime", "")
     # 确保created是整数类型
     self.created = int(node_dict["created"]) if node_dict["created"] is not None else 0
     # 确保last_retrieved是整数类型
@@ -421,6 +446,7 @@ class ConceptNode:
     curr_package["node_type"] = self.node_type
     curr_package["content"] = self.content
     curr_package["importance"] = self.importance
+    curr_package["datetime"] = self.datetime
     curr_package["created"] = self.created
     curr_package["last_retrieved"] = self.last_retrieved
     curr_package["pointer_id"] = self.pointer_id
@@ -443,6 +469,87 @@ class MemoryStream:
       self.id_to_node[new_node.node_id] = new_node
 
     self.embeddings = embeddings
+    self._embedding_dim_checked = False
+
+
+  def precheck_embedding_dimensions(self, force: bool = False):
+    """
+    启动阶段检查并修复记忆节点 embedding 维度，避免首条消息检索时重算。
+    """
+    result = {"checked": False, "expected_dim": None, "fixed": 0}
+    if self._embedding_dim_checked and not force:
+      return result
+    # 确保embeddings不为None
+    if self.embeddings is None:
+      self.embeddings = {}
+      if not force:
+        return result
+
+    try:
+      # 首先尝试从已初始化的embedding服务获取维度，避免重复调用
+      from utils.api_embedding_service import get_embedding_service
+      from utils import util
+      service = get_embedding_service()
+      
+      # 如果服务已经有维度信息，直接使用
+      if hasattr(service, 'embedding_dim') and service.embedding_dim is not None:
+        expected_dim = service.embedding_dim
+        util.log(1, f"使用已初始化的embedding服务维度: {expected_dim}")
+      else:
+        # 只有在服务未初始化维度时才调用dimension_check
+        util.log(1, "embedding服务维度未初始化，进行维度检查...")
+        sample_embedding = get_text_embedding("dimension_check")
+        expected_dim = len(sample_embedding) if isinstance(sample_embedding, (list, tuple)) else None
+        
+    except Exception as e:
+      from utils import util
+      util.log(2, f"启动阶段 embedding 维度检查失败: {str(e)}")
+      # 即使检查失败，也标记为已检查，避免重复尝试
+      self._embedding_dim_checked = True
+      return result
+
+    if expected_dim is None:
+      from utils import util
+      util.log(2, "无法获取 embedding 维度，跳过维度检查")
+      self._embedding_dim_checked = True
+      return result
+
+    fixed = 0
+    if self.seq_nodes:
+      contents = [node.content for node in self.seq_nodes if node is not None]
+    else:
+      contents = list(self.embeddings.keys())
+
+    for content in contents:
+      if content in self.embeddings:
+        node_embedding = self.embeddings[content]
+        if not _is_valid_embedding(node_embedding, expected_dim):
+          # 记录维度不一致的详细信息
+          current_dim = len(node_embedding) if isinstance(node_embedding, (list, tuple)) else "未知"
+          from utils import util
+          util.log(2, f"发现维度不一致的embedding: 内容='{content[:30]}...', 当前维度={current_dim}, 期望维度={expected_dim}")
+          
+          try:
+            util.log(1, f"正在重新生成embedding: '{content[:30]}...'")
+            regenerated = get_text_embedding(content)
+            if regenerated is not None and _is_valid_embedding(regenerated, expected_dim):
+              self.embeddings[content] = regenerated
+              fixed += 1
+              util.log(1, f"成功修复embedding维度: '{content[:30]}...' ({current_dim} -> {len(regenerated)})")
+            else:
+              regenerated_dim = len(regenerated) if isinstance(regenerated, (list, tuple)) else "未知"
+              util.log(2, f"重新生成的embedding维度仍不一致: '{content[:30]}...' (期望={expected_dim}, 实际={regenerated_dim})，已忽略")
+          except Exception as e:
+            util.log(2, f"重新生成embedding失败: '{content[:30]}...' - {str(e)}")
+
+    if fixed > 0:
+      from utils import util
+      util.log(1, f"启动阶段已修复 {fixed} 条记忆节点 embedding 维度")
+    self._embedding_dim_checked = True
+    result["checked"] = True
+    result["expected_dim"] = expected_dim
+    result["fixed"] = fixed
+    return result
 
 
   def count_observations(self): 
@@ -473,7 +580,7 @@ class MemoryStream:
       time_step: Current time_step 
       n_count: The number of nodes that we want to retrieve. 
       curr_filter: Filtering the node.type that we want to retrieve. 
-        Acceptable values are 'all', 'reflection', 'observation' 
+        Acceptable values are 'all', 'reflection', 'observation', 'conversation' 
       hp: Hyperparameter for [recency_w, relevance_w, importance_w]
       verbose: verbose
     Returns: 
@@ -486,8 +593,8 @@ class MemoryStream:
     if len(self.seq_nodes) == 0:
       return dict()
 
-    # Filtering for the desired node type. curr_filter can be one of the three
-    # elements: 'all', 'reflection', 'observation' 
+    # Filtering for the desired node type. curr_filter can be one of the
+    # elements: 'all', 'reflection', 'observation', 'conversation'
     if curr_filter == "all": 
       curr_nodes = self.seq_nodes
     else: 
@@ -497,7 +604,7 @@ class MemoryStream:
 
     # 确保embeddings不为None
     if self.embeddings is None:
-      print("警告: 在retrieve方法中，embeddings为None，初始化为空字典")
+      util.log(2, "警告: 在retrieve方法中，embeddings为None，初始化为空字典")
       self.embeddings = {}
 
     # <retrieved> is the main dictionary that we are returning
@@ -556,7 +663,7 @@ class MemoryStream:
 
     Parameters:
       time_step: Current time_step 
-      node_type: type of node -- it's either reflection, observation
+      node_type: type of node -- it's either reflection, observation, conversation
       content: the str content of the memory record
       importance: int score of the importance score
       pointer_id: the str of the parent node 
@@ -569,6 +676,7 @@ class MemoryStream:
     node_dict["node_type"] = node_type
     node_dict["content"] = content
     node_dict["importance"] = importance
+    node_dict["datetime"] = datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
     node_dict["created"] = time_step
     node_dict["last_retrieved"] = time_step
     node_dict["pointer_id"] = pointer_id
@@ -584,7 +692,7 @@ class MemoryStream:
     try:
         self.embeddings[content] = get_text_embedding(content)
     except Exception as e:
-        print(f"获取文本嵌入时出错: {str(e)}")
+        util.log(3, f"获取文本嵌入时出错: {str(e)}")
         # 如果获取嵌入失败，使用空列表代替
         self.embeddings[content] = []
 
@@ -592,6 +700,10 @@ class MemoryStream:
   def remember(self, content, time_step=0):
     score = generate_importance_score([content])[0]
     self._add_node(time_step, "observation", content, score, None)
+
+  def remember_conversation(self, content, time_step=0):
+    score = generate_importance_score([content])[0]
+    self._add_node(time_step, "conversation", content, score, None)
 
 
   def reflect(self, anchor, reflection_count=5, 

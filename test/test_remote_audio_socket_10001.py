@@ -60,7 +60,7 @@ if __name__ == "__main__":
     client = socket.socket()
     client.connect(("127.0.0.1", 10001))
     client.send(b"<username>user_device_32_6</username>")#指定用户名
-    # client.send(b"<output>False<output>")#不回传音频（可以通过websocket 10003数字人接口接收音频http路径和本地路径）
+    # client.send(b"<output>False<output>")#不回传音频（可以通过websocket 10002数字人接口接收音频http路径和本地路径）
     time.sleep(1)
     pygame.mixer.init()
     Thread(target=send_audio, args=(client,)).start()

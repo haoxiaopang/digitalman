@@ -37,7 +37,11 @@
         "search_files": false,
         "write_file": false
     },
-    "4": {},
+    "4": {
+        "ingest_yueshen": false,
+        "yueshen_stats": false,
+        "query_yueshen": false
+    },
     "6": {
         "list_windows": true
     }

@@ -264,7 +264,7 @@ def get_text_embedding(text: str,
 
     # 优先使用外部 API embedding 服务
     try:
-      from bionicmemory.services.api_embedding_service import get_embedding_service
+      from utils.api_embedding_service import get_embedding_service
       service = get_embedding_service()
       return service.encode_text(text)
     except Exception as api_err:

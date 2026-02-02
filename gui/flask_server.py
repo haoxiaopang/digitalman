@@ -111,6 +111,22 @@ def _build_llm_url(base_url: str) -> str:
         return url + "/chat/completions"
     return url + "/v1/chat/completions"
 
+
+
+def _build_embedding_url(base_url: str) -> str:
+    if not base_url:
+        return ""
+    url = base_url.rstrip("/")
+    if url.endswith("/v1/embeddings") or url.endswith("/embeddings"):
+        return url
+    if url.endswith("/v1/chat/completions"):
+        return url[:-len("/v1/chat/completions")] + "/v1/embeddings"
+    if url.endswith("/chat/completions"):
+        return url[:-len("/chat/completions")] + "/embeddings"
+    if url.endswith("/v1"):
+        return url + "/embeddings"
+    return url + "/v1/embeddings"
+
 @__app.route('/api/submit', methods=['post'])
 def api_submit():
     data = request.values.get('data')
@@ -353,7 +369,7 @@ def api_send_v1_chat_completions():
     # 处理聊天完成请求
     data = request.get_json()
     if not data:
-        return jsonify({'error': '未提供数据'})
+        return jsonify({'error': 'missing request body'})
     try:
         model = data.get('model', 'fay')
         if model == 'llm':
@@ -412,20 +428,29 @@ def api_send_v1_chat_completions():
                 return jsonify({'error': f'LLM request failed: {exc}'}), 500
 
         last_content = ""
-        if 'messages' in data and data['messages']:
-            last_message = data['messages'][-1]
-            username = last_message.get('role', 'User')
-            if username == 'user':
-                username = 'User'
-            last_content = last_message.get('content', 'No content provided')
-        else:
-            last_content = 'No messages found'
-            username = 'User'
+        username = "User"
+        messages = data.get("messages")
+        if isinstance(messages, list) and messages:
+            last_message = messages[-1] or {}
+            username = last_message.get("role", "User") or "User"
+            if username == "user":
+                username = "User"
+            last_content = last_message.get("content") or ""
+        elif isinstance(messages, str):
+            last_content = messages
 
         observation = data.get('observation', '')
         # 检查请求中是否指定了流式传输
         stream_requested = data.get('stream', False)
         no_reply = _as_bool(data.get('no_reply', data.get('noReply', False)))
+        obs_text = ""
+        if observation is not None:
+            obs_text = observation.strip() if isinstance(observation, str) else str(observation).strip()
+        message_text = last_content.strip() if isinstance(last_content, str) else str(last_content).strip()
+        if not message_text and not obs_text:
+            return jsonify({'error': 'messages and observation are both empty'}), 400
+        if not message_text and obs_text:
+            no_reply = True
         if no_reply:
             interact = Interact("text", 1, {'user': username, 'msg': last_content, 'observation': str(observation), 'stream': bool(stream_requested), 'no_reply': True})
             util.printInfo(1, username, '[text chat no_reply]{}'.format(interact.data["msg"]), time.time())
@@ -588,7 +613,6 @@ def api_delete_user():
 
             # 清除缓存的 agent 对象
             try:
-                from llm import nlp_cognitive_stream
                 if hasattr(nlp_cognitive_stream, 'agents') and username in nlp_cognitive_stream.agents:
                     del nlp_cognitive_stream.agents[username]
             except Exception:
@@ -854,6 +878,48 @@ def gpt_stream_response(last_content, username):
     return Response(generate(), mimetype='text/event-stream')
 
 # 处理非流式响应
+@__app.route('/v1/embeddings', methods=['post'])
+@__app.route('/api/send/v1/embeddings', methods=['post'])
+def api_send_v1_embeddings():
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'missing request body'})
+    try:
+        config_util.load_config()
+        base_url = config_util.embedding_api_base_url or config_util.gpt_base_url
+        api_key = config_util.embedding_api_key or config_util.key_gpt_api_key
+        model_name = config_util.embedding_api_model
+    except Exception as exc:
+        return jsonify({'error': f'Embedding config load failed: {exc}'}), 500
+
+    embed_url = _build_embedding_url(base_url)
+    if not embed_url:
+        return jsonify({'error': 'Embedding base_url is not configured'}), 500
+
+    payload = dict(data) if isinstance(data, dict) else {}
+    req_model = payload.get('model')
+    if (not req_model) or str(req_model).lower() in ('embedding', 'fay-embedding', 'fay', 'default'):
+        if model_name:
+            payload['model'] = model_name
+
+    headers = {'Content-Type': 'application/json'}
+    if api_key:
+        headers['Authorization'] = f'Bearer {api_key}'
+
+    try:
+        resp = requests.post(embed_url, headers=headers, json=payload, timeout=60)
+        content_type = resp.headers.get("Content-Type", "application/json")
+        if "charset=" not in content_type.lower():
+            content_type = f"{content_type}; charset=utf-8"
+        return Response(
+            resp.content,
+            status=resp.status_code,
+            content_type=content_type,
+        )
+    except Exception as exc:
+        return jsonify({'error': f'Embedding request failed: {exc}'}), 500
+
+
 def non_streaming_response(last_content, username):
     sm = stream_manager.new_instance()
     _, nlp_Stream = sm.get_Stream(username)

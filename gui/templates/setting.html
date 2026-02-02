@@ -119,10 +119,6 @@
                 <el-switch v-model="memory_isolate_by_user" :disabled="use_bionic_memory" active-color="#13ce66" inactive-color="#ff4949" @change=saveConfig()></el-switch>
                 <span style="font-size: 12px; color: #666; margin-left: 10px;">开启后每个用户将拥有独立记忆</span>
               </li>
-              <li> <span class="font_name">仿生记忆:</span>
-                <el-switch v-model="use_bionic_memory" active-color="#13ce66" inactive-color="#ff4949" @change="onBionicMemoryChange"></el-switch>
-                <span style="font-size: 12px; color: #666; margin-left: 10px;">开启后使用仿生记忆系统（试验功能，人格克隆不可用）</span>
-              </li>
             </ul>
           </div>
          

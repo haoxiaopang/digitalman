@@ -186,7 +186,7 @@ class LocalEmbeddingService:
         }
 
 # 导入 API Embedding 服务
-from bionicmemory.services.api_embedding_service import ApiEmbeddingService
+from utils.api_embedding_service import ApiEmbeddingService
 
 # 全局实例
 _global_embedding_service = None

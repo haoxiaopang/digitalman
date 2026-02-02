@@ -3,7 +3,7 @@
         "id": 1,
         "name": "tools",
         "ip": "",
-        "connection_time": "2025-12-10 21:16:35",
+        "connection_time": "2026-01-22 15:59:12",
         "key": "",
         "transport": "stdio",
         "command": "python",
@@ -47,7 +47,7 @@
         "id": 4,
         "name": "yueshen rag",
         "ip": "",
-        "connection_time": "2025-12-10 21:16:44",
+        "connection_time": "2026-01-27 16:01:24",
         "key": "",
         "transport": "stdio",
         "command": "C:\\Users\\Lenovo\\anaconda3\\envs\\rag\\python.exe",
@@ -55,20 +55,13 @@
             "mcp_servers/yueshen_rag/server.py"
         ],
         "cwd": "",
-        "env": {
-            "YUESHEN_AUTO_INGEST": "1",
-            "YUESHEN_AUTO_INTERVAL": "300",
-            "YUESHEN_AUTO_RESET_ON_START": "0",
-            "YUESHEN_EMBED_API_KEY": "sk-REDACTED",
-            "YUESHEN_EMBED_BASE_URL": "https://api.siliconflow.cn/v1",
-            "YUESHEN_EMBED_MODEL": "Qwen/Qwen3-Embedding-8B"
-        }
+        "env": {}
     },
     {
         "id": 5,
         "name": "window capture",
         "ip": "",
-        "connection_time": "2025-12-10 21:16:45",
+        "connection_time": "2025-12-17 22:26:55",
         "key": "",
         "transport": "stdio",
         "command": "python",
@@ -77,5 +70,64 @@
         ],
         "cwd": "",
         "env": {}
+    },
+    {
+        "id": 6,
+        "name": "broswermcp",
+        "ip": "",
+        "connection_time": "2026-01-15 14:18:38",
+        "key": "",
+        "transport": "stdio",
+        "command": "npx",
+        "args": [
+            "@browsermcp/mcp@latest"
+        ],
+        "cwd": "",
+        "env": {}
+    },
+    {
+        "id": 7,
+        "name": "Todo Server",
+        "ip": "",
+        "connection_time": "2025-12-17 16:06:29",
+        "key": "",
+        "transport": "stdio",
+        "command": "python",
+        "args": [
+            "-u",
+            "server.py"
+        ],
+        "cwd": "mcp_servers/mcp-todo-server",
+        "env": {}
+    },
+    {
+        "id": 8,
+        "name": "KinEcho",
+        "ip": "",
+        "connection_time": "2025-12-24 11:20:24",
+        "key": "",
+        "transport": "stdio",
+        "command": "python",
+        "args": [
+            "server.py"
+        ],
+        "cwd": "mcp_servers\\elderly_mcp",
+        "env": {}
+    },
+    {
+        "id": 9,
+        "name": "easydeal-trading",
+        "ip": "",
+        "connection_time": "2026-01-15 20:30:00",
+        "key": "",
+        "transport": "stdio",
+        "command": "C:\\Users\\Lenovo\\anaconda3\\envs\\fxai\\python.exe",
+        "args": [
+            "D:/Projects/easy_deal_agent/easy-deal/easydeal_mcp_server.py"
+        ],
+        "cwd": "D:/Projects/easy_deal_agent/easy-deal",
+        "env": {
+            "EA_PROFILE_PATH": "D:\\Projects\\easy_deal_agent\\config.set"
+        }
     }
 ]

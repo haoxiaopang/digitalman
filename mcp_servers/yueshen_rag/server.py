@@ -62,9 +62,10 @@ DEFAULT_PERSIST_DIR = os.getenv(
     os.path.join(PROJECT_ROOT, "cache_data", "chromadb_yueshen"),
 )
 COLLECTION_NAME = "yueshen_kb"
-DEFAULT_EMBED_BASE_URL = os.getenv("YUESHEN_EMBED_BASE_URL")
-DEFAULT_EMBED_API_KEY = os.getenv("YUESHEN_EMBED_API_KEY")
-DEFAULT_EMBED_MODEL = os.getenv("YUESHEN_EMBED_MODEL", "text-embedding-3-small")
+# Default to Fay's OpenAI-compatible passthrough embedding endpoint.
+DEFAULT_EMBED_BASE_URL = os.getenv("YUESHEN_EMBED_BASE_URL", "http://127.0.0.1:5000/v1")
+DEFAULT_EMBED_API_KEY = os.getenv("YUESHEN_EMBED_API_KEY", "sk-fay")
+DEFAULT_EMBED_MODEL = os.getenv("YUESHEN_EMBED_MODEL", "embedding")
 AUTO_INGEST_ENABLED = os.getenv("YUESHEN_AUTO_INGEST", "1") != "0"
 AUTO_INGEST_INTERVAL = int(os.getenv("YUESHEN_AUTO_INTERVAL", "300"))
 AUTO_RESET_ON_START = os.getenv("YUESHEN_AUTO_RESET_ON_START", "0") != "0"
@@ -469,6 +470,7 @@ class AutoIngestor:
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._snapshot: Dict[str, Tuple[float, int]] = {}
+        self._last_ingest_ok = False
 
     def _take_snapshot(self) -> Dict[str, Tuple[float, int]]:
         snap: Dict[str, Tuple[float, int]] = {}
@@ -490,7 +492,13 @@ class AutoIngestor:
             return True
         return False
 
-    def _ingest_once(self, reset: bool = False):
+    def _vector_count(self) -> Optional[int]:
+        try:
+            return self.km.store.collection.count()
+        except Exception:
+            return None
+
+    def _ingest_once(self, reset: bool = False) -> bool:
         try:
             res = self.km.ingest(
                 corpus_dir=self.km.corpus_dir,
@@ -500,8 +508,12 @@ class AutoIngestor:
                 embedding_model=self.km.embedder.model,
             )
             logger.info("Auto-ingest done: %s", json.dumps(res, ensure_ascii=False))
+            self._last_ingest_ok = True
+            return True
         except Exception as exc:
             logger.error("Auto-ingest failed: %s", exc)
+            self._last_ingest_ok = False
+            return False
 
     def _loop(self):
         # initial snapshot and optional first ingest
@@ -514,8 +526,17 @@ class AutoIngestor:
             self._ingest_once(reset=False)
 
         while not self._stop.wait(self.interval):
-            if self._has_changes():
-                logger.info("Detected corpus change, auto-ingest...")
+            changed = self._has_changes()
+            vectors = self._vector_count()
+            needs_bootstrap = (vectors == 0) or (vectors is None and not self._last_ingest_ok)
+            if changed or needs_bootstrap:
+                if changed:
+                    reason = "corpus change"
+                elif vectors == 0:
+                    reason = "empty vector store"
+                else:
+                    reason = "retry after ingest failure"
+                logger.info("Auto-ingest trigger: %s", reason)
                 self._ingest_once(reset=False)
 
     def start(self):
@@ -636,6 +657,27 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
 
         if name == "query_yueshen":
             query_text = arguments.get("query", "")
+            try:
+                vector_count = manager.store.collection.count()
+            except Exception:
+                vector_count = None
+            if vector_count == 0:
+                return [
+                    TextContent(
+                        type="text",
+                        text=json.dumps(
+                            {
+                                "results": [],
+                                "count": 0,
+                                "skipped": True,
+                                "reason": "vector store empty; run ingest_yueshen first",
+                                "stats": manager.stats(),
+                            },
+                            ensure_ascii=False,
+                            indent=2,
+                        ),
+                    )
+                ]
             # 跳过常见问候和简单回复，不进行知识库查询
             if _is_trivial_query(query_text):
                 return [TextContent(type="text", text=json.dumps({
