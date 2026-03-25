@@ -426,7 +426,9 @@ def api_get_Msg():
         i = len(list) - 1
         while i >= 0:
             timezone = pytz.timezone('Asia/Shanghai')
-            timetext = datetime.datetime.fromtimestamp(list[i][3], timezone).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+            ts = list[i][3]
+            ts_sec = ts / 1000 if ts > 9999999999 else ts  # 兼容旧秒级和新毫秒级时间戳
+            timetext = datetime.datetime.fromtimestamp(ts_sec, timezone).strftime('%Y-%m-%d %H:%M:%S.') + f"{int(ts % 1000) if ts > 9999999999 else 0:03d}"
             relist.append(dict(type=list[i][0], way=list[i][1], content=list[i][2], createtime=list[i][3], timetext=timetext, username=list[i][5], id=list[i][6], is_adopted=list[i][7]))
             i -= 1
         if fay_booter.is_running():
@@ -1323,19 +1325,7 @@ def api_clear_memory():
         success_messages = []
         error_messages = []
 
-        # 1. 清除仿生记忆
-        try:
-            from llm.nlp_bionicmemory_stream import clear_agent_memory as clear_bionic
-            if clear_bionic():
-                success_messages.append("仿生记忆")
-                util.log(1, "仿生记忆已清除")
-            else:
-                error_messages.append("清除仿生记忆失败")
-        except Exception as e:
-            error_messages.append(f"清除仿生记忆时出错: {str(e)}")
-            util.log(1, f"清除仿生记忆时出错: {str(e)}")
-
-        # 2. 清除认知记忆（文件系统）
+        # 清除认知记忆（文件系统）
         try:
             memory_dir = os.path.join(os.getcwd(), "memory")
 
@@ -1392,13 +1382,7 @@ def api_clear_memory():
 @__app.route('/api/start-genagents', methods=['POST'])
 def api_start_genagents():
     try:
-        # 检查是否启用了仿生记忆
         config_util.load_config()
-        if config_util.config["memory"].get("use_bionic_memory", False):
-            return jsonify({
-                'success': False,
-                'message': '仿生记忆模式下不支持人格克隆功能，请在设置中关闭仿生记忆后重试'
-            }), 400
 
         # 只有在数字人启动后才能克隆人格
         if not fay_booter.is_running():
@@ -1554,11 +1538,9 @@ def run():
     class NullLogHandler:
         def write(self, *args, **kwargs):
             pass
-    server = pywsgi.WSGIServer(
-        ('0.0.0.0', 5000), 
-        __app,
-        log=NullLogHandler()  
-    )
+    logging.getLogger('werkzeug').setLevel(logging.ERROR)
+    from werkzeug.serving import make_server
+    server = make_server('0.0.0.0', 5000, __app, threaded=True)
     server.serve_forever()
 
 def start():
