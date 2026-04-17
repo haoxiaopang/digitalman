@@ -39,6 +39,56 @@ SERVER_NAME = "fay_player_knowledge_base_mcp_server"
 SERVER_VERSION = "1.0.0"
 PROTOCOL_VERSION = "2024-11-05"
 
+# ---------------------------------------------------------------------------
+# 轻量 Embedding 客户端（调用 OpenAI 兼容 /embeddings 接口）
+# ---------------------------------------------------------------------------
+import math
+import urllib.request
+import urllib.error
+
+_fay_url: str = ""  # Fay 本地服务地址，如 http://127.0.0.1:5000
+
+
+def _cosine_similarity(a: List[float], b: List[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    mag_a = math.sqrt(sum(x * x for x in a))
+    mag_b = math.sqrt(sum(x * x for x in b))
+    if mag_a == 0 or mag_b == 0:
+        return 0.0
+    return dot / (mag_a * mag_b)
+
+
+def _call_embedding_api(text: str) -> Optional[List[float]]:
+    """通过 Fay 透传接口 /v1/embeddings 获取向量，失败返回 None。"""
+    if not _fay_url:
+        return None
+    try:
+        url = f"{_fay_url.rstrip('/')}/v1/embeddings"
+        payload = json.dumps({
+            "model": "fay-embedding",
+            "input": text[:2000],
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+        data = result.get("data")
+        if data and isinstance(data, list) and len(data) > 0:
+            return data[0].get("embedding")
+    except Exception as exc:
+        write_stderr(f"[{SERVER_NAME}] embedding 调用失败: {exc}")
+    return None
+
+
+def _embedding_available() -> bool:
+    return bool(_fay_url)
+
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg"}
 MARKDOWN_EXTS = {".md", ".markdown"}
 ZIP_EXTS = {".zip"}
@@ -124,6 +174,7 @@ class SectionRecord:
     images: List[Dict[str, str]] = field(default_factory=list)
     body_markdown: str = ""
     content_text: str = ""
+    section_type: str = "content"  # "cover" | "toc" | "content"
 
     def to_catalog_dict(self) -> Dict[str, Any]:
         return {
@@ -131,6 +182,7 @@ class SectionRecord:
             "index": self.index,
             "title": self.title,
             "level": self.level,
+            "section_type": self.section_type,
             "quiz_count": len(self.quizzes),
             "image_count": len(self.images),
             "has_script": bool(self.script.strip()),
@@ -148,6 +200,7 @@ class SectionRecord:
             "index": self.index,
             "title": self.title,
             "level": self.level,
+            "section_type": self.section_type,
             "script": self.script,
             "code_text": self.code_text,
             "images": list(self.images),
@@ -211,6 +264,7 @@ class SearchChunk:
     text: str
     title_tokens: set[str]
     tokens: set[str]
+    embedding: Optional[List[float]] = None
 
 
 def write_stderr(text: str) -> None:
@@ -364,9 +418,22 @@ def strip_markdown(text: str) -> str:
     return value.strip()
 
 
-def build_search_tokens(text: str) -> set[str]:
+def build_search_tokens(text: str, *, split_compound: bool = True) -> set[str]:
+    """构建搜索 token 集合。
+    split_compound=True（默认）：用于索引端，拆分复合词以扩大召回面。
+    split_compound=False：用于查询端，保持用户原词不拆，避免碎片匹配。
+    """
     normalized = normalize_search_text(text)
-    tokens = {match.group(0).lower() for match in ASCII_TOKEN_RE.finditer(normalized)}
+    tokens = set()
+    for match in ASCII_TOKEN_RE.finditer(normalized):
+        whole = match.group(0).lower()
+        tokens.add(whole)
+        # 仅索引端拆分复合词（如 fay-player → fay, player）
+        if split_compound and any(sep in whole for sep in ("-", ".", "/")):
+            for part in re.split(r"[-./]", whole):
+                part = part.strip()
+                if len(part) >= 2:
+                    tokens.add(part)
     for span in CJK_SPAN_RE.findall(normalized):
         if len(span) <= 2:
             tokens.add(span)
@@ -434,6 +501,20 @@ def section_title_from_heading(raw_title: str, default_index: int) -> Tuple[int,
         rest = normalize_spaces(matched.group(2))
         return index, rest or f"Section {index}"
     return default_index, title or f"Section {default_index}"
+
+
+_COVER_KEYWORDS = {"封面", "cover", "首页", "标题页"}
+_TOC_KEYWORDS = {"目录", "toc", "table of contents", "章节目录", "课程目录", "大纲"}
+
+
+def classify_section_type(title: str) -> str:
+    """根据节标题判断类型: cover / toc / content"""
+    t = normalize_spaces(title).lower().strip()
+    if t in _COVER_KEYWORDS or any(kw in t for kw in _COVER_KEYWORDS):
+        return "cover"
+    if t in _TOC_KEYWORDS or any(kw in t for kw in _TOC_KEYWORDS):
+        return "toc"
+    return "content"
 
 
 def split_markdown_on_level(text: str, level: int) -> Tuple[List[str], List[Tuple[str, List[str]]]]:
@@ -775,6 +856,7 @@ def load_markdown_source(path: Path, text: str, source_type: str) -> KnowledgeSo
                     images=images,
                     body_markdown=body,
                     content_text="\n\n".join(content_chunks).strip(),
+                    section_type=classify_section_type(section_title),
                 )
             )
     else:
@@ -784,11 +866,12 @@ def load_markdown_source(path: Path, text: str, source_type: str) -> KnowledgeSo
                 quizzes = parse_quizzes_from_markdown(body) if "题目" in heading else []
                 code_blocks = extract_code_blocks(body)
                 content_text = strip_markdown(body)
+                sec_title = normalize_spaces(heading) or f"Section {idx + 1}"
                 sections.append(
                     SectionRecord(
                         section_id=f"s{idx + 1:02d}-{slugify(heading, f'section-{idx + 1}')}",
                         index=idx,
-                        title=normalize_spaces(heading) or f"Section {idx + 1}",
+                        title=sec_title,
                         level=2,
                         script=content_text,
                         code_text="\n\n".join(code_blocks).strip(),
@@ -796,6 +879,7 @@ def load_markdown_source(path: Path, text: str, source_type: str) -> KnowledgeSo
                         images=extract_image_refs(body),
                         body_markdown=body,
                         content_text=content_text,
+                        section_type=classify_section_type(sec_title),
                     )
                 )
         else:
@@ -812,6 +896,7 @@ def load_markdown_source(path: Path, text: str, source_type: str) -> KnowledgeSo
                     images=extract_image_refs(text),
                     body_markdown=text.strip(),
                     content_text=content_text,
+                    section_type=classify_section_type(title),
                 )
             )
 
@@ -1004,6 +1089,7 @@ def load_course_zip(path: Path) -> KnowledgeSource:
                     images=images,
                     body_markdown="",
                     content_text="\n\n".join(content_parts).strip(),
+                    section_type=classify_section_type(raw_title),
                 )
             )
 
@@ -1122,6 +1208,41 @@ class KnowledgeBase:
                     )
         self.chunks = chunks
         self.section_lookup = section_lookup
+        # embedding 索引在后台线程异步构建，不阻塞 MCP 连接
+        if _embedding_available():
+            threading.Thread(
+                target=self._build_embeddings_async,
+                daemon=True,
+            ).start()
+
+    def _build_embeddings_async(self) -> None:
+        """后台线程：等 Fay flask 就绪后逐个计算 chunk embedding。"""
+        # 等待 Fay flask 服务就绪（最多 30 秒）
+        for _ in range(30):
+            try:
+                test_req = urllib.request.Request(
+                    f"{_fay_url.rstrip('/')}/v1/models",
+                    method="GET",
+                )
+                with urllib.request.urlopen(test_req, timeout=2):
+                    break
+            except Exception:
+                time.sleep(1)
+        else:
+            write_stderr(f"[{SERVER_NAME}] Fay 服务未就绪，跳过 embedding 索引")
+            return
+
+        embedded_count = 0
+        chunks_snapshot = list(self.chunks)  # 快照，避免迭代中被替换
+        for chunk in chunks_snapshot:
+            if chunk.embedding is not None:
+                continue
+            embed_text = f"{chunk.source_title} - {chunk.section_title}: {chunk.text[:500]}"
+            vec = _call_embedding_api(embed_text)
+            if vec:
+                chunk.embedding = vec
+                embedded_count += 1
+        write_stderr(f"[{SERVER_NAME}] embedding 索引完成: {embedded_count}/{len(chunks_snapshot)} chunks")
 
     def add_source_path(self, path_text: str, *, recursive: bool = True) -> Dict[str, Any]:
         path = Path(path_text).expanduser().resolve()
@@ -1317,9 +1438,14 @@ class KnowledgeBase:
         if source_id and source_id not in self.sources:
             source_id = ""  # fallback: search all sources
 
-        query_tokens = filter_query_tokens(build_search_tokens(query_text))
+        query_tokens = filter_query_tokens(build_search_tokens(query_text, split_compound=False))
         if not query_tokens:
             query_tokens = list(build_search_tokens(query_text))
+
+        # 计算 query embedding（用于混合评分）
+        query_embedding: Optional[List[float]] = None
+        if _embedding_available():
+            query_embedding = _call_embedding_api(query)
 
         grouped: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
@@ -1327,10 +1453,20 @@ class KnowledgeBase:
             if source_id and chunk.source_id != source_id:
                 continue
 
+            source_title_text = normalize_search_text(chunk.source_title)
             title_text = normalize_search_text(chunk.section_title)
             body_text = normalize_search_text(chunk.text)
             score = 0.0
 
+            # 课程标题匹配（最高优先级）
+            if query_text == source_title_text:
+                score += 200.0
+            elif query_text in source_title_text:
+                score += 120.0
+            elif source_title_text in query_text:
+                score += 80.0
+
+            # 章节标题匹配
             if query_text == title_text:
                 score += 100.0
             elif query_text in title_text:
@@ -1340,20 +1476,30 @@ class KnowledgeBase:
 
             token_hits = 0
             title_hits = 0
+            source_title_tokens = build_search_tokens(source_title_text)
+            source_title_hits = 0
             for token in query_tokens:
                 if token in chunk.tokens:
                     token_hits += 1
                 if token in chunk.title_tokens:
                     title_hits += 1
+                if token in source_title_tokens:
+                    source_title_hits += 1
             score += token_hits * 4.0
             score += title_hits * 6.0
+            score += source_title_hits * 15.0
 
             if chunk.chunk_type == "quiz" and ("题" in query_text or "quiz" in query_text):
                 score += 3.0
             if chunk.chunk_type == "code" and ("代码" in query_text or "code" in query_text):
                 score += 3.0
 
-            if score <= 0:
+            # embedding 语义相似度加分
+            if query_embedding and chunk.embedding:
+                sim = _cosine_similarity(query_embedding, chunk.embedding)
+                score += max(0.0, sim) * 100.0  # 余弦相似度 0~1 映射到 0~100
+
+            if score < 10.0:
                 continue
 
             key = (chunk.source_id, chunk.section_id)
@@ -1388,6 +1534,27 @@ class KnowledgeBase:
                 }
             )
 
+        # 预计算每个课程的 source-level 标题匹配分（所有章节共享）
+        # 标题越短、查询词占比越高 → 越可能是"关于这个词本身"的课程
+        source_title_scores: Dict[str, float] = {}
+        for sid, src in self.sources.items():
+            st = normalize_search_text(src.title)
+            s = 0.0
+            if query_text == st:
+                s = 200.0
+            elif query_text in st:
+                # 查询词在标题中的覆盖率越高，说明课程越聚焦于该主题
+                coverage = len(query_text) / max(len(st), 1)
+                s = 120.0 + coverage * 80.0  # 120~200 之间
+            elif st in query_text:
+                s = 80.0
+            # 课程标题 token 命中
+            st_tokens = build_search_tokens(st)
+            for token in query_tokens:
+                if token in st_tokens:
+                    s += 15.0
+            source_title_scores[sid] = s
+
         ranked: List[Tuple[float, Dict[str, Any]]] = []
         for group in grouped.values():
             best_score = float(group["best_score"])
@@ -1397,6 +1564,11 @@ class KnowledgeBase:
             repeated_match_bonus = min(match_count, 3) * 0.5
             aggregate_score = best_score + max(0.0, score_sum - best_score) * 0.35
             aggregate_score += match_type_bonus + repeated_match_bonus
+            # 课程级标题分：确保"关于X的介绍"课程在搜索X时始终排在前面
+            # 取课程级和 chunk 级的较高者，避免重复计分
+            src_id = group["source"].source_id
+            src_title_score = source_title_scores.get(src_id, 0.0)
+            aggregate_score = max(aggregate_score, src_title_score) + min(aggregate_score, src_title_score) * 0.3
             ranked.append((aggregate_score, group))
 
         ranked.sort(
@@ -1437,6 +1609,7 @@ class KnowledgeBase:
                 "section_id": section.section_id,
                 "section_index": section.index,
                 "section_title": section.title,
+                "section_type": section.section_type,
                 "matched_in": sorted(group["matched_in"]),
                 "match_count": int(group["match_count"]),
                 "snippet": details[0]["snippet"] if details else short_text(section.content_text or section.script),
@@ -1551,6 +1724,74 @@ def make_tool_specs() -> Dict[str, Dict[str, Any]]:
     }
 
 
+def _build_resources_list(kb: KnowledgeBase) -> Dict[str, Any]:
+    """Build the resources/list response from current knowledge base state."""
+    resources: List[Dict[str, Any]] = []
+    # 1) 课程总览资源
+    resources.append({
+        "uri": "knowledge://courses",
+        "name": "课程列表",
+        "description": "当前已加载的所有课程概览（名称、作者、简介）",
+        "mimeType": "application/json",
+    })
+    # 2) 每门课程的目录资源
+    for source_id in sorted(kb.sources):
+        source = kb.sources[source_id]
+        resources.append({
+            "uri": f"knowledge://courses/{source_id}/catalog",
+            "name": f"{source.title} — 章节目录",
+            "description": f"课程「{source.title}」的完整章节目录",
+            "mimeType": "application/json",
+        })
+    return {"resources": resources}
+
+
+def _read_resource(kb: KnowledgeBase, uri: str) -> List[Dict[str, Any]]:
+    """Read a resource by URI and return a list of content items."""
+    if uri == "knowledge://courses":
+        items = []
+        for sid in sorted(kb.sources):
+            s = kb.sources[sid]
+            items.append({
+                "source_id": s.source_id,
+                "title": s.title,
+                "author": s.author,
+                "description": s.description,
+                "section_count": len(s.sections),
+            })
+        return [{"uri": uri, "mimeType": "application/json", "text": json_pretty({"courses": items})}]
+
+    # knowledge://courses/{source_id}/catalog
+    prefix = "knowledge://courses/"
+    suffix = "/catalog"
+    if uri.startswith(prefix) and uri.endswith(suffix):
+        source_id = uri[len(prefix):-len(suffix)]
+        source = kb.sources.get(source_id)
+        if not source:
+            raise ValueError(f"source not found: {source_id}")
+        sections = []
+        for sec in source.sections:
+            sections.append({
+                "section_id": sec.section_id,
+                "index": sec.index,
+                "title": sec.title,
+                "level": sec.level,
+                "has_script": bool(sec.script.strip()),
+                "has_code": bool(sec.code_text.strip()),
+                "quiz_count": len(sec.quizzes),
+            })
+        payload = {
+            "source_id": source.source_id,
+            "title": source.title,
+            "author": source.author,
+            "description": source.description,
+            "sections": sections,
+        }
+        return [{"uri": uri, "mimeType": "application/json", "text": json_pretty(payload)}]
+
+    raise ValueError(f"unknown resource URI: {uri}")
+
+
 def make_tools_list(tool_specs: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     tools = []
     for name, spec in tool_specs.items():
@@ -1656,7 +1897,7 @@ def run_mcp_loop(kb: KnowledgeBase) -> None:
         if method == "initialize":
             result = {
                 "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {"tools": {}},
+                "capabilities": {"tools": {}, "resources": {}},
                 "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
                 "instructions": (
                     "Fay 课程知识库检索服务。\n\n"
@@ -1680,6 +1921,21 @@ def run_mcp_loop(kb: KnowledgeBase) -> None:
         if method == "ping":
             if msg_id is not None:
                 write_response(msg_id, {"pong": True})
+            continue
+
+        if method == "resources/list":
+            if msg_id is not None:
+                write_response(msg_id, _build_resources_list(kb))
+            continue
+
+        if method == "resources/read":
+            if msg_id is not None:
+                uri = str(params.get("uri") or "").strip()
+                try:
+                    contents = _read_resource(kb, uri)
+                    write_response(msg_id, {"contents": contents})
+                except Exception as exc:
+                    write_error(msg_id, -32602, f"resource read failed: {exc}")
             continue
 
         if method == "tools/list":
@@ -1848,7 +2104,21 @@ def main() -> int:
         default=DEFAULT_IMAGE_PORT,
         help=f"Port for the image HTTP server (default: {DEFAULT_IMAGE_PORT}). Set to 0 to disable.",
     )
+    parser.add_argument(
+        "--fay-url",
+        type=str,
+        default="http://127.0.0.1:5000",
+        help="Fay local service URL. Used for embedding via /v1/embeddings passthrough.",
+    )
     args = parser.parse_args()
+
+    # 初始化 embedding（通过 Fay 透传）
+    global _fay_url
+    if args.fay_url:
+        _fay_url = args.fay_url.rstrip("/")
+        write_stderr(f"[{SERVER_NAME}] embedding 已启用 (via Fay passthrough): {_fay_url}/v1/embeddings")
+    else:
+        write_stderr(f"[{SERVER_NAME}] embedding 未配置，仅使用 token 匹配")
 
     # Set up image cache and HTTP server
     if args.image_port != 0:

@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any, Dict, List
 from flask_cors import CORS
 from faymcp.mcp_client import McpClient
-from faymcp import tool_registry, prestart_registry
+from faymcp import tool_registry, prestart_registry, resource_registry
 from utils import util
 
 
@@ -60,6 +60,8 @@ def load_mcp_servers():
                 for server in servers:
                     server['status'] = 'offline'
                     server['latency'] = '0ms'
+                    if 'autostart' not in server:
+                        server['autostart'] = False
                 return servers
         else:
             # 如果文件不存在，使用默认数据并保存
@@ -122,7 +124,8 @@ def save_mcp_servers(servers):
                 "command": server.get('command', ''),
                 "args": server.get('args', []),
                 "cwd": server.get('cwd', ''),
-                "env": server.get('env', {})
+                "env": server.get('env', {}),
+                "autostart": bool(server.get('autostart', False))
             }
             servers_to_save.append(server_copy)
             
@@ -173,6 +176,37 @@ def _attach_prestart_metadata(server_id: int, tools: List[Dict[str, Any]]) -> Li
     return enriched
 
 # 连接真实MCP服务器
+def _fetch_and_cache_resources(server_id: int, client: McpClient, server_name: str = "") -> None:
+    """Read all MCP resources from a connected server and cache them."""
+    try:
+        res_list = client.list_resources()
+        if not res_list:
+            resource_registry.clear_server_resources(server_id)
+            return
+        cached: list = []
+        for res in res_list:
+            uri = res.get("uri", "")
+            if not uri:
+                continue
+            text = client.read_resource(uri)
+            cached.append({
+                "uri": uri,
+                "name": res.get("name", ""),
+                "description": res.get("description", ""),
+                "text": text or "",
+            })
+        resource_registry.set_server_resources(server_id, cached, server_name=server_name)
+        util.log(1, f"MCP Resources 已缓存: server_id={server_id}, count={len(cached)}")
+    except Exception as exc:
+        util.log(1, f"读取 MCP Resources 失败 (server_id={server_id}): {exc}")
+        resource_registry.clear_server_resources(server_id)
+
+
+def _inject_embedding_args(args: list) -> list:
+    """MCP 服务器默认已指向本地 5000 端口，此处仅在需要覆盖时追加 --fay-url。"""
+    return args
+
+
 def connect_to_real_mcp(server):
     """
     连接到真实的MCP服务器
@@ -205,9 +239,12 @@ def connect_to_real_mcp(server):
             repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
             cfg_cwd = server.get('cwd')
             cwd = cfg_cwd if (cfg_cwd and str(cfg_cwd).strip()) else repo_root
+            # 自动注入 embedding 配置到 MCP 服务器启动参数
+            base_args = list(server.get('args', []) or [])
+            base_args = _inject_embedding_args(base_args)
             stdio_config = {
                 "command": server.get('command'),
-                "args": server.get('args', []) or [],
+                "args": base_args,
                 "cwd": cwd,
                 "env": (server.get('env') or None),
             }
@@ -246,7 +283,10 @@ def connect_to_real_mcp(server):
             
             # 保存客户端对象
             mcp_clients[server_id] = client
-            
+
+            # 读取 MCP Resources 并缓存
+            _fetch_and_cache_resources(server_id, client, server_name=server.get('name', ''))
+
             return True, server, result
         else:
             # 连接失败，更新服务器状态
@@ -258,7 +298,8 @@ def connect_to_real_mcp(server):
             if server_id in mcp_clients:
                 del mcp_clients[server_id]
             tool_registry.mark_all_unavailable(server_id)
-                
+            resource_registry.clear_server_resources(server_id)
+
             return False, server, []
     except Exception as e:
         util.log(1, f"连接MCP服务器失败: {e}")
@@ -411,7 +452,8 @@ def add_mcp_server():
         "command": data.get('command', ''),
         "args": data.get('args', []),
         "cwd": data.get('cwd', ''),
-        "env": data.get('env', {})
+        "env": data.get('env', {}),
+        "autostart": bool(data.get('autostart', False))
     }
     
     # 如果请求中包含 auto_connect 字段并且为 True，则尝试连接
@@ -613,6 +655,8 @@ def update_mcp_server(server_id):
     server['name'] = data.get('name', server['name'])
     transport = data.get('transport', server.get('transport', 'sse'))
     server['transport'] = transport
+    if 'autostart' in data:
+        server['autostart'] = bool(data.get('autostart'))
 
     # 根据传输类型更新配置
     if transport == 'stdio':
@@ -827,8 +871,19 @@ def get_server_tools(server_id):
         "tools": []
     }), 404
 
+@app.route('/api/mcp/servers/<int:server_id>/resources', methods=['GET'])
+def get_server_resources(server_id):
+    """获取指定服务器的 MCP Resources 列表"""
+    for server in mcp_servers:
+        if server['id'] == server_id:
+            if server['status'] != 'online':
+                return jsonify({"success": False, "message": "服务器离线", "resources": []})
+            resources = resource_registry.get_server_resources(server_id)
+            return jsonify({"success": True, "resources": resources})
+    return jsonify({"success": False, "message": "服务器未找到", "resources": []}), 404
+
+
 # API路由 - 获取所有在线服务器的工具列表
-# API?? - ??????????????
 @app.route('/api/mcp/servers/online/tools', methods=['GET'])
 def get_all_online_server_tools():
     global mcp_servers
@@ -1111,6 +1166,23 @@ def toggle_tool_state(server_id, tool_name):
             "success": False,
             "message": f"切换工具状态失败: {str(e)}"
         }), 500
+
+@app.route('/api/mcp/servers/<int:server_id>/resources/toggle', methods=['POST'])
+def toggle_resource_state(server_id):
+    """切换 Resource 的启用/禁用状态（控制是否注入 prompt）"""
+    try:
+        data = request.json or {}
+        uri = data.get("uri", "")
+        enabled = bool(data.get("enabled", True))
+        if not uri:
+            return jsonify({"success": False, "message": "缺少 uri 参数"}), 400
+        found = resource_registry.set_resource_enabled(server_id, uri, enabled)
+        if not found:
+            return jsonify({"success": False, "message": "Resource 未找到"}), 404
+        return jsonify({"success": True, "uri": uri, "enabled": enabled})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
 
 # API路由 - 配置预启动工具
 @app.route('/api/mcp/servers/<int:server_id>/tools/<string:tool_name>/prestart', methods=['POST'])
@@ -1594,17 +1666,50 @@ def run():
     )
     server.serve_forever()
 
+# 启动时自动连接标记为 autostart 的服务器
+def _autostart_connect_servers():
+    """在 Flask 启动后，后台连接所有配置了开机启动的服务器。"""
+    global mcp_servers
+    # 稍等片刻让 Flask 完成启动，避免与其它初始化抢占日志
+    time.sleep(2)
+    targets = [s for s in mcp_servers if s.get('autostart')]
+    if not targets:
+        return
+    util.log(1, f"开机启动：准备连接 {len(targets)} 个MCP服务器")
+    for server in targets:
+        try:
+            server_id = server['id']
+            success, updated_server, _ = connect_to_real_mcp(server)
+            for i, s in enumerate(mcp_servers):
+                if s['id'] == server_id:
+                    mcp_servers[i] = updated_server
+                    break
+            if success:
+                util.log(1, f"开机启动：{updated_server.get('name')} 已连接")
+            else:
+                util.log(1, f"开机启动：{updated_server.get('name')} 连接失败")
+        except Exception as e:
+            util.log(1, f"开机启动连接异常: {e}")
+    try:
+        save_mcp_servers(mcp_servers)
+    except Exception as e:
+        util.log(1, f"开机启动后保存状态失败: {e}")
+
+
 # 启动MCP服务器
 def start():
     # 启动连接检查定时任务
     # start_connection_check() TODO 暂时取消定时检查任务
-    
+
     # 输出启动信息
     util.log(1, "MCP服务已启动在端口5010")
-    
+
     # 启动服务器
     from scheduler.thread_manager import MyThread
     MyThread(target=run).start()
+
+    # 后台触发 autostart 连接
+    MyThread(target=_autostart_connect_servers).start()
 
 if __name__ == '__main__':
     import logging

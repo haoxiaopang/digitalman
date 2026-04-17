@@ -11,7 +11,35 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from faymcp import prestart_registry, tool_registry
+from faymcp import prestart_registry, tool_registry, resource_registry
+
+
+_RESOURCE_TEXT_MAX_CHARS = 8000  # 注入 prompt 的资源文本总上限
+
+
+def get_all_resource_texts() -> str:
+    """Return enabled resource texts for prompt injection, with size protection."""
+    try:
+        resources = resource_registry.get_enabled_resources()
+        if not resources:
+            return ""
+        parts: List[str] = []
+        total_len = 0
+        for res in resources:
+            text = res.get("text", "").strip()
+            if not text:
+                continue
+            server_name = res.get("server_name", "")
+            name = res.get("name", "")
+            label = f"{server_name} / {name}" if server_name and name else (name or server_name or res.get("uri", ""))
+            entry = f"【{label}】\n{text}"
+            if total_len + len(entry) > _RESOURCE_TEXT_MAX_CHARS:
+                break
+            parts.append(entry)
+            total_len += len(entry)
+        return "\n\n".join(parts)
+    except Exception:
+        return ""
 
 
 def get_enabled_tools() -> List[Dict[str, Any]]:
