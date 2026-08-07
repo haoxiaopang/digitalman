@@ -76,8 +76,6 @@ from utils import config_util as cfg
 from core import content_db
 
 
-from ai_module import nlp_cemotion
-
 
 from core import stream_manager
 

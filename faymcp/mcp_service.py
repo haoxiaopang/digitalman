@@ -371,6 +371,20 @@ def disconnect_all_mcp_servers():
     
     util.log(1, f'成功断开 {disconnected_count} 个MCP服务连接，资源已清理')
 
+# 递归序列化 MCP 工具返回值（CallToolResult 等 pydantic 对象 -> 可 jsonify 的结构）
+def _serialize_mcp_result(obj):
+    if obj is None:
+        return None
+    if isinstance(obj, (str, int, float, bool)):
+        return obj
+    if isinstance(obj, dict):
+        return {k: _serialize_mcp_result(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_serialize_mcp_result(item) for item in obj]
+    if hasattr(obj, '__dict__'):
+        return {k: _serialize_mcp_result(v) for k, v in vars(obj).items()}
+    return str(obj)
+
 # 调用MCP服务器工具
 def call_mcp_tool(server_id, method, params=None, skip_enabled_check=False):
     """
@@ -480,7 +494,7 @@ def add_mcp_server():
                                 tool_dict = {
                                     'name': tool_name,
                                     'description': str(getattr(tool, 'description', '')),
-                                    'enabled': get_tool_state(server_id, tool_name)
+                                    'enabled': get_tool_state(new_id, tool_name)
                                 }
                                 
                                 # 处理 inputSchema
@@ -499,7 +513,7 @@ def add_mcp_server():
                                         'name': tool_name,
                                         'description': str(tool.get('description', '')),
                                         'inputSchema': tool.get('inputSchema', {}),
-                                        'enabled': get_tool_state(server_id, tool_name)
+                                        'enabled': get_tool_state(new_id, tool_name)
                                     })
                                 else:
                                     # 其他情况，尝试转换为字符串
@@ -507,7 +521,7 @@ def add_mcp_server():
                                     tools_list.append({
                                         'name': tool_name, 
                                         'description': '',
-                                        'enabled': get_tool_state(server_id, tool_name)
+                                        'enabled': get_tool_state(new_id, tool_name)
                                     })
                     except Exception as e:
                         util.log(1, f"工具列表序列化失败: {e}")
@@ -517,7 +531,7 @@ def add_mcp_server():
                             tool_name = str(tool)
                             tools_list.append({
                                 'name': tool_name,
-                                'enabled': get_tool_state(server_id, tool_name)
+                                'enabled': get_tool_state(new_id, tool_name)
                             })
                 
         except Exception as e:
@@ -988,16 +1002,9 @@ def call_mcp_tool_direct(tool_name):
 
         if success:
             try:
-                if hasattr(result, '__dict__'):
-                    result_dict = dict(vars(result))
-                    return jsonify({
-                        "success": True,
-                        "result": result_dict,
-                        "server": server['name']
-                    })
                 return jsonify({
                     "success": True,
-                    "result": result,
+                    "result": _serialize_mcp_result(result),
                     "server": server['name']
                 })
             except Exception as e:
@@ -1652,18 +1659,19 @@ def start_connection_check():
 
 # 主程序入口
 def run():
-    # 禁止服务器日志输出的类
-    class NullLogHandler:
-        def write(self, *args, **kwargs):
-            pass
-    
-    # 使用gevent的pywsgi服务器，并禁用日志输出
-    from gevent import pywsgi
-    server = pywsgi.WSGIServer(
-        ('0.0.0.0', 5010), 
-        app,
-        log=NullLogHandler()
-    )
+    # 使用 werkzeug 的多线程 WSGI 服务器，而不是 gevent pywsgi。
+    # 原因：MCP 工具调用最终会走到 McpClient.call_tool -> future.result()，
+    # 这是一个阻塞等待（客户端的 asyncio 事件循环跑在各自独立的后台线程里）。
+    # 若用 gevent 单 hub 且未做 monkey.patch_all，这个阻塞会卡住整个 hub，
+    # 导致 5010 上所有请求被串行化、慢工具执行期间无法并发。
+    # 而 monkey.patch_all 又会把 MCP 客户端的 asyncio 事件循环线程打成 greenlet，
+    # 直接破坏 asyncio 运行。折中且正确的做法：每个请求用独立 OS 线程处理，
+    # 阻塞只影响该请求自身，且与后台 asyncio 线程完全兼容。
+    import logging as _logging
+    from werkzeug.serving import make_server
+    # 静默 werkzeug 的每请求访问日志，保持与原 NullLogHandler 一致的安静输出
+    _logging.getLogger('werkzeug').setLevel(_logging.ERROR)
+    server = make_server('0.0.0.0', 5010, app, threaded=True)
     server.serve_forever()
 
 # 启动时自动连接标记为 autostart 的服务器

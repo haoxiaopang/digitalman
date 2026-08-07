@@ -145,10 +145,16 @@ class DeviceInputListener(Recorder):
         addr = None
         while self.__running:
             try:
-                
                 data = b""
-                while self.deviceConnector:
+                while self.deviceConnector and self.__running:
                     data = self.deviceConnector.recv(2048)
+                    if not data:
+                        # 对端已优雅关闭连接（FIN），recv 返回空字节但不抛异常。
+                        # 不判断这一点会导致线程在死连接上以极高频率空转，
+                        # 且 stop() 永远无法让本线程退出（见下方 finally 与 stop()）。
+                        util.log(1, f"远程音频设备 {self.username} 连接已关闭，停止监听线程")
+                        self.__running = False
+                        break
                     if b"<username>" in data:
                         data_str = data.decode("utf-8")
                         match = re.search(r"<username>(.*?)</username>", data_str)
@@ -167,10 +173,20 @@ class DeviceInputListener(Recorder):
                         self.streamCache.write(data)
                     time.sleep(0.005)
                 self.streamCache.clear()
-         
+
             except Exception as err:
-                pass
+                # 连接被重置/网络异常等：视为连接已死，退出线程而不是无限重试
+                util.log(1, f"远程音频设备 {self.username} 监听异常，停止监听线程: {err}")
+                self.__running = False
             time.sleep(1)
+
+        # 线程即将退出：确保 socket 一定被关闭，避免 fd 泄漏
+        try:
+            if self.deviceConnector:
+                self.deviceConnector.close()
+        except Exception:
+            pass
+        self.deviceConnector = None
 
     def on_speaking(self, text):
         global feiFei
@@ -189,6 +205,15 @@ class DeviceInputListener(Recorder):
     def stop(self):
         super().stop()
         self.__running = False
+        # 主动关闭 socket：run() 的监听线程可能正阻塞在 recv() 上等待数据，
+        # 若连接已经是"僵尸连接"（对端未发 FIN/RST，例如 NAT 静默丢弃映射），
+        # 仅置 __running=False 不会让线程退出。强制关闭 socket 会让 recv()
+        # 立刻抛出异常，使线程能在下一轮循环及时感知并退出。
+        try:
+            if self.deviceConnector:
+                self.deviceConnector.close()
+        except Exception:
+            pass
 
     def is_remote(self):
         return True
@@ -197,20 +222,22 @@ class DeviceInputListener(Recorder):
 def device_socket_keep_alive():
     global DeviceInputListenerDict
     while __running:
-        delkey = None
-        for key, value in DeviceInputListenerDict.items():
+        # 先收集本轮所有死连接的 key，循环内部不直接 pop（会在遍历 dict 时报错），
+        # 遍历结束后统一清理。原实现发现一个死连接就 break，多个设备同时断线时
+        # 每 10 秒只能清理 1 个，清理速度远跟不上产生速度，是残留累积的重要原因。
+        dead_keys = []
+        for key, value in list(DeviceInputListenerDict.items()):
             try:
                 value.deviceConnector.send(b'\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8')#发送心跳包
                 if wsa_server.get_web_instance().is_connected(value.username):
-                    wsa_server.get_web_instance().add_cmd({"remote_audio_connect": True, "Username" : value.username}) 
+                    wsa_server.get_web_instance().add_cmd({"remote_audio_connect": True, "Username" : value.username})
             except Exception as serr:
                 util.printInfo(1, value.username, "远程音频输入输出设备已经断开：{}".format(key))
                 value.stop()
-                delkey = key
-                break
-        if delkey:
-             value =  DeviceInputListenerDict.pop(delkey)
-             if wsa_server.get_web_instance().is_connected(value.username):
+                dead_keys.append(key)
+        for key in dead_keys:
+            value = DeviceInputListenerDict.pop(key, None)
+            if value and wsa_server.get_web_instance().is_connected(value.username):
                 wsa_server.get_web_instance().add_cmd({"remote_audio_connect": False, "Username" : value.username})
         time.sleep(10)
 

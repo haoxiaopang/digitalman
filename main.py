@@ -201,10 +201,6 @@ def __create_memory():
     if not os.path.exists("./memory"):
         os.mkdir("./memory")
 
-def __check_and_clear_chroma_db():
-    """检查并清除ChromaDB数据库（如果存在清除标记）- 已移除仿生记忆，保留函数避免调用处报错"""
-    pass
-
 def kill_process_by_port(port):
     for conn in psutil.net_connections(kind='inet'):
         if conn.laddr.port == port and conn.pid:
@@ -274,7 +270,6 @@ def console_listener():
 if __name__ == '__main__':
     __clear_samples()
     __create_memory()
-    __check_and_clear_chroma_db()  # 在创建memory目录后立即检查清理
     __clear_logs()
 
     #init_db

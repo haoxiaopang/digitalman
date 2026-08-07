@@ -12,36 +12,8 @@ from typing import Any, Callable, Dict, List, Literal, Optional, TypedDict, Tupl
 from collections.abc import Mapping, Sequence
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-try:
-    from langgraph.graph import END, START, StateGraph
-    _LANGGRAPH_AVAILABLE = True
-except Exception:
-    END = None
-    START = None
-    StateGraph = None
-    _LANGGRAPH_AVAILABLE = False
 
-# 新增：本地知识库相关导入
 import re
-from pathlib import Path
-import docx
-from docx.document import Document
-from docx.oxml.table import CT_Tbl
-from docx.oxml.text.paragraph import CT_P
-from docx.table import _Cell, Table
-from docx.text.paragraph import Paragraph
-try:
-    from pptx import Presentation
-    PPTX_AVAILABLE = True
-except ImportError:
-    PPTX_AVAILABLE = False
-
-# 用于处理 .doc 文件的库
-try:
-    import win32com.client
-    WIN32COM_AVAILABLE = True
-except ImportError:
-    WIN32COM_AVAILABLE = False
 
 from utils import util
 import utils.config_util as cfg
@@ -161,16 +133,10 @@ class AgentState(TypedDict, total=False):
     request: str
     messages: List[ConversationMessage]
     tool_results: List[ToolResult]
-    next_action: Optional[ToolCall]
-    status: Literal["planning", "needs_tool", "completed", "failed"]
-    final_response: Optional[str]
-    final_messages: Optional[List[SystemMessage | HumanMessage | AIMessage]]
-    _response_streamed: Optional[bool]
-    planner_preview: Optional[str]
+    judge_preview: Optional[str]
     audit_log: List[str]
     context: Dict[str, Any]
     error: Optional[str]
-    max_steps: int
 
 
 def _find_last_safe_punct(text: str, punctuation_list) -> int:
@@ -784,12 +750,12 @@ def _build_dialogue_messages(
     return normalized
 
 
-def _build_planner_messages(state: AgentState) -> List[SystemMessage | HumanMessage | AIMessage]:
+def _build_judge_messages(state: AgentState) -> List[SystemMessage | HumanMessage | AIMessage]:
     context = state.get("context", {}) or {}
     system_prompt = context.get("system_prompt", "")
     request = state.get("request", "")
     tool_specs = context.get("tool_registry", {}) or {}
-    planner_preview = state.get("planner_preview")
+    judge_preview = state.get("judge_preview")
     conversation = state.get("messages", []) or []
     history = state.get("tool_results", []) or []
     memory_context = context.get("memory_context", "")
@@ -821,7 +787,7 @@ def _build_planner_messages(state: AgentState) -> List[SystemMessage | HumanMess
     # 构建工具名列表（简短，只列名称）
     tool_names = ", ".join(tool_specs.keys()) if tool_specs else "无"
 
-    planner_system = _merge_system_input(
+    judge_system = _merge_system_input(
         "你是一个闲聊判断器。判断用户的话是不是闲聊，请严格输出合法 JSON，不要输出其他内容。",
         '【你在系统里的角色】'
         '\n你是第一响应者。你的回答如果涉及事实信息，系统会在后台另起一个大模型自动核实并修正，'
@@ -859,13 +825,13 @@ def _build_planner_messages(state: AgentState) -> List[SystemMessage | HumanMess
         _format_context_section("预启动工具结果", prestart_context),
         _format_context_section("其他观察", observation),
         _format_context_section("历史工具执行", history_text if history_text != "（暂无）" else ""),
-        _format_context_section("规划器预览", planner_preview),
+        _format_context_section("闲聊判断器预览", judge_preview),
     )
     dialogue_messages = _build_dialogue_messages(conversation, username, fallback_request=request)
     if not dialogue_messages:
         dialogue_messages = [HumanMessage(content=request or "你好")]
 
-    return [SystemMessage(content=planner_system), *dialogue_messages]
+    return [SystemMessage(content=judge_system), *dialogue_messages]
 
 def _build_final_messages(state: AgentState) -> List[SystemMessage | HumanMessage | AIMessage]:
     context = state.get("context", {}) or {}
@@ -875,7 +841,7 @@ def _build_final_messages(state: AgentState) -> List[SystemMessage | HumanMessag
     observation = context.get("observation", "")
     prestart_context = context.get("prestart_context", "")
     conversation = state.get("messages", []) or []
-    planner_preview = state.get("planner_preview")
+    judge_preview = state.get("judge_preview")
     username = context.get("username", "User")
 
     history_text = _truncate_history(state.get("tool_results", []))
@@ -913,7 +879,7 @@ def _build_final_messages(state: AgentState) -> List[SystemMessage | HumanMessag
         _format_context_section("预启动工具结果", prestart_context),
         _format_context_section("其他观察", observation),
         _format_context_section("工具执行摘要", history_text if history_text != "（暂无）" else ""),
-        _format_context_section("规划器建议", planner_preview),
+        _format_context_section("闲聊判断器建议", judge_preview),
     )
     dialogue_messages = _build_dialogue_messages(conversation, username, fallback_request=request)
     if not dialogue_messages:
@@ -921,13 +887,13 @@ def _build_final_messages(state: AgentState) -> List[SystemMessage | HumanMessag
 
     return [SystemMessage(content=final_system), *dialogue_messages]
 
-def _call_planner_llm(
+def _call_judge_llm(
     state: AgentState,
     stream_callback: Optional[Callable[[str], None]] = None,
     on_tool_detected: Optional[Callable[[], None]] = None,
 ) -> Dict[str, Any]:
     """
-    调用规划器 LLM，支持流式输出 finish+message 模式。
+    调用闲聊判断器 LLM，支持流式输出 finish+message 模式。
 
     Args:
         state: 当前工作流状态
@@ -937,8 +903,8 @@ def _call_planner_llm(
     Returns:
         解析后的决策字典
     """
-    messages = _build_planner_messages(state)
-    _log_prompt(messages, tag="planner")
+    messages = _build_judge_messages(state)
+    _log_prompt(messages, tag="judge")
 
     # 如果有流式回调，使用流式模式检测 finish+message
     if stream_callback is not None:
@@ -1104,7 +1070,7 @@ def _call_planner_llm(
     response = llm.invoke(messages)
     content = getattr(response, "content", None)
     if not isinstance(content, str):
-        raise RuntimeError("规划器返回内容异常，未获得字符串。")
+        raise RuntimeError("闲聊判断器返回内容异常，未获得字符串。")
     # 先移除 think 标签，兼容带思考标签的模型（如 DeepSeek R1）
     trimmed = _remove_think_from_text(content.strip())
     trimmed = _strip_json_code_fence(trimmed)
@@ -1120,188 +1086,6 @@ def _call_planner_llm(
     decision.setdefault("_raw", trimmed)
     return decision
 
-
-def _plan_next_action(state: AgentState) -> AgentState:
-    context = state.get("context", {}) or {}
-    audit_log = list(state.get("audit_log", []))
-    history = state.get("tool_results", []) or []
-    max_steps = state.get("max_steps", 12)
-    if len(history) >= max_steps:
-        audit_log.append("规划器：超过最大步数，终止流程。")
-        return {
-            "status": "failed",
-            "audit_log": audit_log,
-            "error": "工具调用步数超限",
-            "context": context,
-        }
-
-    # 从 context 获取流式回调（如果有的话）
-    stream_callback = context.get("planner_stream_callback")
-    decision = _call_planner_llm(state, stream_callback=stream_callback)
-    audit_log.append(f"规划器：决策 -> {decision.get('_raw', decision)}")
-
-    action = decision.get("action")
-    if action == "tool":
-        tool_name = decision.get("tool")
-        tool_registry: Dict[str, WorkflowToolSpec] = context.get("tool_registry", {})
-        if tool_name not in tool_registry:
-            audit_log.append(f"规划器：未知工具 {tool_name}")
-            return {
-                "status": "failed",
-                "audit_log": audit_log,
-                "error": f"未知工具 {tool_name}",
-                "context": context,
-            }
-        args = decision.get("args") or {}
-
-        if history:
-            last_entry = history[-1]
-            last_call = last_entry.get("call", {}) or {}
-            if (
-                last_entry.get("success")
-                and last_call.get("name") == tool_name
-                and (last_call.get("args") or {}) == args
-                and last_entry.get("output")
-            ):
-                recent_attempts = sum(
-                    1
-                    for item in reversed(history)
-                    if item.get("call", {}).get("name") == tool_name
-                )
-                if recent_attempts >= 1:
-                    audit_log.append(
-                        "规划器：检测到工具重复调用，使用最新结果产出最终回复。"
-                    )
-                    final_messages = _build_final_messages(state)
-                    _log_prompt(final_messages, tag="final")
-                    preview = last_entry.get("output")
-                    return {
-                        "status": "completed",
-                        "planner_preview": preview,
-                        "final_response": None,
-                        "final_messages": final_messages,
-                        "audit_log": audit_log,
-                        "context": context,
-                    }
-        return {
-            "next_action": {"name": tool_name, "args": args},
-            "status": "needs_tool",
-            "audit_log": audit_log,
-            "context": context,
-        }
-
-    if action in {"finish", "finish_text"}:
-        preview = decision.get("message")
-        was_streamed = decision.get("_streamed", False)
-        used_tool = bool(history)
-        # 如果 finish 带有 message，直接使用，不需要再调用最终 LLM
-        if action == "finish" and preview:
-            audit_log.append(f"规划器：任务完成，直接输出回复: {preview[:50]}...")
-            return {
-                "status": "completed",
-                "planner_preview": preview,
-                "final_response": preview,
-                "final_messages": None,  # 不需要再调用 LLM
-                "audit_log": audit_log,
-                "context": context,
-                "_response_streamed": was_streamed,  # 标记是否已流式输出
-            }
-        # finish_text / finish 不带 message，调用最终 LLM 生成回复
-        final_messages = _build_final_messages(state)
-        audit_log.append("规划器：任务完成，准备调用 LLM 生成最终回复。")
-        return {
-            "status": "completed",
-            "planner_preview": preview,
-            "final_response": None,
-            "final_messages": final_messages,
-            "audit_log": audit_log,
-            "context": context,
-        }
-
-    raise RuntimeError(f"未知的规划器决策: {decision}")
-
-
-def _execute_tool(state: AgentState) -> AgentState:
-    context = dict(state.get("context", {}) or {})
-    action = state.get("next_action")
-    if not action:
-        return {
-            "status": "failed",
-            "error": "缺少要执行的工具指令",
-            "context": context,
-        }
-
-    history = list(state.get("tool_results", []) or [])
-    audit_log = list(state.get("audit_log", []) or [])
-    conversation = list(state.get("messages", []) or [])
-
-    name = action.get("name")
-    args = action.get("args", {})
-    tool_registry: Dict[str, WorkflowToolSpec] = context.get("tool_registry", {})
-    spec = tool_registry.get(name)
-    if not spec:
-        return {
-            "status": "failed",
-            "error": f"未知工具 {name}",
-            "context": context,
-        }
-
-    attempts = sum(1 for item in history if item.get("call", {}).get("name") == name)
-    success, output, error = spec.executor(args, attempts)
-    result: ToolResult = {
-        "call": {"name": name, "args": args},
-        "success": success,
-        "output": output,
-        "error": error,
-        "attempt": attempts + 1,
-    }
-    history.append(result)
-    audit_log.append(f"执行器：{name} 第 {result['attempt']} 次 -> {'成功' if success else '失败'}")
-
-    message_lines = [
-        f"[TOOL] {name} {'成功' if success else '失败'}。",
-    ]
-    if output:
-        message_lines.append(f"[TOOL] 输出：{_truncate_text(output, 200)}")
-    if error:
-        message_lines.append(f"[TOOL] 错误：{_truncate_text(error, 200)}")
-    conversation.append({"role": "assistant", "content": "\n".join(message_lines)})
-
-    return {
-        "tool_results": history,
-        "messages": conversation,
-        "next_action": None,
-        "audit_log": audit_log,
-        "status": "planning",
-        "error": error if not success else None,
-        "context": context,
-    }
-
-
-def _route_decision(state: AgentState) -> str:
-    return "call_tool" if state.get("status") == "needs_tool" else "end"
-
-
-def _build_workflow_app() -> StateGraph:
-    if not _LANGGRAPH_AVAILABLE:
-        return None
-    graph = StateGraph(AgentState)
-    graph.add_node("plan_next", _plan_next_action)
-    graph.add_node("call_tool", _execute_tool)
-    graph.add_edge(START, "plan_next")
-    graph.add_conditional_edges(
-        "plan_next",
-        _route_decision,
-        {
-            "call_tool": "call_tool",
-            "end": END,
-        },
-    )
-    graph.add_edge("call_tool", "plan_next")
-    return graph.compile()
-
-
-_WORKFLOW_APP = _build_workflow_app() if _LANGGRAPH_AVAILABLE else None
 
 def get_user_memory_dir(username=None):
     """根据配置决定是否按用户名隔离记忆目录"""
@@ -1338,395 +1122,6 @@ def get_current_time_step(username=None):
     except Exception as e:
         util.log(1, f"获取time_step时出错: {str(e)}，使用0代替")
         return 0
-
-# 新增：本地知识库相关函数
-def read_doc_file(file_path):
-    """
-    读取doc文件内容
-    
-    参数:
-        file_path: doc文件路径
-        
-    返回:
-        str: 文档内容
-    """
-    try:
-        # 方法1: 使用 win32com.client（Windows系统，推荐用于.doc文件）
-        if WIN32COM_AVAILABLE:
-            word = None
-            doc = None
-            try:
-                import pythoncom
-                pythoncom.CoInitialize()  # 初始化COM组件
-                
-                word = win32com.client.Dispatch("Word.Application")
-                word.Visible = False
-                doc = word.Documents.Open(file_path)
-                content = doc.Content.Text
-                
-                # 先保存内容，再尝试关闭
-                if content and content.strip():
-                    try:
-                        doc.Close()
-                        word.Quit()
-                    except Exception as close_e:
-                        util.log(1, f"关闭Word应用程序时出错: {str(close_e)}，但内容已成功提取")
-                    
-                    try:
-                        pythoncom.CoUninitialize()  # 清理COM组件
-                    except:
-                        pass
-                    
-                    return content.strip()
-                
-            except Exception as e:
-                util.log(1, f"使用 win32com 读取 .doc 文件失败: {str(e)}")
-            finally:
-                # 确保资源被释放
-                try:
-                    if doc:
-                        doc.Close()
-                except:
-                    pass
-                try:
-                    if word:
-                        word.Quit()
-                except:
-                    pass
-                try:
-                    pythoncom.CoUninitialize()
-                except:
-                    pass
-        
-        # 方法2: 简单的二进制文本提取（备选方案）
-        try:
-            with open(file_path, 'rb') as f:
-                raw_data = f.read()
-                # 尝试提取可打印的文本
-                text_parts = []
-                current_text = ""
-                
-                for byte in raw_data:
-                    char = chr(byte) if 32 <= byte <= 126 or byte in [9, 10, 13] else None
-                    if char:
-                        current_text += char
-                    else:
-                        if len(current_text) > 3:  # 只保留长度大于3的文本片段
-                            text_parts.append(current_text.strip())
-                        current_text = ""
-                
-                if len(current_text) > 3:
-                    text_parts.append(current_text.strip())
-                
-                # 过滤和清理文本
-                filtered_parts = []
-                for part in text_parts:
-                    # 移除过多的重复字符和无意义的片段
-                    if (len(part) > 5 and 
-                        not part.startswith('Microsoft') and 
-                        not all(c in '0123456789-_.' for c in part) and
-                        len(set(part)) > 3):  # 字符种类要多样
-                        filtered_parts.append(part)
-                
-                if filtered_parts:
-                    return '\n'.join(filtered_parts)
-                    
-        except Exception as e:
-            util.log(1, f"使用二进制方法读取 .doc 文件失败: {str(e)}")
-        
-        util.log(1, f"无法读取 .doc 文件 {file_path}，建议转换为 .docx 格式")
-        return ""
-        
-    except Exception as e:
-        util.log(1, f"读取doc文件 {file_path} 时出错: {str(e)}")
-        return ""
-
-def read_docx_file(file_path):
-    """
-    读取docx文件内容
-    
-    参数:
-        file_path: docx文件路径
-        
-    返回:
-        str: 文档内容
-    """
-    try:
-        doc = docx.Document(file_path)
-        content = []
-        
-        for element in doc.element.body:
-            if isinstance(element, CT_P):
-                paragraph = Paragraph(element, doc)
-                if paragraph.text.strip():
-                    content.append(paragraph.text.strip())
-            elif isinstance(element, CT_Tbl):
-                table = Table(element, doc)
-                for row in table.rows:
-                    row_text = []
-                    for cell in row.cells:
-                        if cell.text.strip():
-                            row_text.append(cell.text.strip())
-                    if row_text:
-                        content.append(" | ".join(row_text))
-        
-        return "\n".join(content)
-    except Exception as e:
-        util.log(1, f"读取docx文件 {file_path} 时出错: {str(e)}")
-        return ""
-    
-def read_pptx_file(file_path):
-    """
-    读取pptx文件内容
-    
-    参数:
-        file_path: pptx文件路径
-        
-    返回:
-        str: 演示文稿内容
-    """
-    if not PPTX_AVAILABLE:
-        util.log(1, "python-pptx 库未安装，无法读取 PowerPoint 文件")
-        return ""
-        
-    try:
-        prs = Presentation(file_path)
-        content = []
-        
-        for i, slide in enumerate(prs.slides):
-            slide_content = [f"第{i+1}页："]
-            
-            for shape in slide.shapes:
-                if hasattr(shape, "text") and shape.text.strip():
-                    slide_content.append(shape.text.strip())
-                    
-            if len(slide_content) > 1:  # 有内容才添加
-                content.append("\n".join(slide_content))
-        
-        return "\n\n".join(content)
-    except Exception as e:
-        util.log(1, f"读取pptx文件 {file_path} 时出错: {str(e)}")
-        return ""
-
-def load_local_knowledge_base():
-    """
-    加载本地知识库内容
-    
-    返回:
-        dict: 文件名到内容的映射
-    """
-    knowledge_base = {}
-    
-    # 获取llm/data目录路径
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    data_dir = os.path.join(current_dir, "data")
-    
-    if not os.path.exists(data_dir):
-        util.log(1, f"知识库目录不存在: {data_dir}")
-        return knowledge_base
-    
-    # 遍历data目录中的文件
-    for file_path in Path(data_dir).iterdir():
-        if not file_path.is_file():
-            continue
-            
-        file_name = file_path.name
-        file_extension = file_path.suffix.lower()
-        
-        try:
-            if file_extension == '.docx':
-                content = read_docx_file(str(file_path))
-            elif file_extension == '.doc':
-                content = read_doc_file(str(file_path))
-            elif file_extension == '.pptx':
-                content = read_pptx_file(str(file_path))
-            else:
-                # 尝试作为文本文件读取
-                try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                except UnicodeDecodeError:
-                    try:
-                        with open(file_path, 'r', encoding='gbk') as f:
-                            content = f.read()
-                    except UnicodeDecodeError:
-                        util.log(1, f"无法解码文件: {file_name}")
-                        continue
-            
-            if content.strip():
-                knowledge_base[file_name] = content
-                util.log(1, f"成功加载知识库文件: {file_name} ({len(content)} 字符)")
-            
-        except Exception as e:
-            util.log(1, f"加载知识库文件 {file_name} 时出错: {str(e)}")
-    
-    return knowledge_base
-
-def search_knowledge_base(query, knowledge_base, max_results=3):
-    """
-    在知识库中搜索相关内容
-    
-    参数:
-        query: 查询内容
-        knowledge_base: 知识库字典
-        max_results: 最大返回结果数
-        
-    返回:
-        list: 相关内容列表
-    """
-    if not knowledge_base:
-        return []
-    
-    results = []
-    query_lower = query.lower()
-    
-    # 搜索关键词
-    query_keywords = re.findall(r'\w+', query_lower)
-    
-    for file_name, content in knowledge_base.items():
-        content_lower = content.lower()
-        
-        # 计算匹配度
-        score = 0
-        matched_sentences = []
-        
-        # 按句子分割内容
-        sentences = re.split(r'[。！？\n]', content)
-        
-        for sentence in sentences:
-            if not sentence.strip():
-                continue
-                
-            sentence_lower = sentence.lower()
-            sentence_score = 0
-            
-            # 计算关键词匹配度
-            for keyword in query_keywords:
-                if keyword in sentence_lower:
-                    sentence_score += 1
-            
-            # 如果句子有匹配，记录
-            if sentence_score > 0:
-                matched_sentences.append((sentence.strip(), sentence_score))
-                score += sentence_score
-        
-        # 如果有匹配的内容
-        if score > 0:
-            # 按匹配度排序句子
-            matched_sentences.sort(key=lambda x: x[1], reverse=True)
-            
-            # 取前几个最相关的句子
-            relevant_sentences = [sent[0] for sent in matched_sentences[:5] if sent[0]]
-            
-            if relevant_sentences:
-                results.append({
-                    'file_name': file_name,
-                    'score': score,
-                    'content': '\n'.join(relevant_sentences)
-                })
-    
-    # 按匹配度排序
-    results.sort(key=lambda x: x['score'], reverse=True)
-    
-    return results[:max_results]
-
-# 全局知识库缓存
-_knowledge_base_cache = None
-_knowledge_base_load_time = None
-_knowledge_base_file_times = {}  # 存储文件的最后修改时间
-
-def check_knowledge_base_changes():
-    """
-    检查知识库文件是否有变化
-    
-    返回:
-        bool: 如果有文件变化返回True，否则返回False
-    """
-    global _knowledge_base_file_times
-    
-    # 获取llm/data目录路径
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    data_dir = os.path.join(current_dir, "data")
-    
-    if not os.path.exists(data_dir):
-        return False
-    
-    current_file_times = {}
-    
-    # 遍历data目录中的文件
-    for file_path in Path(data_dir).iterdir():
-        if not file_path.is_file():
-            continue
-        
-        file_name = file_path.name
-        file_extension = file_path.suffix.lower()
-        
-        # 只检查支持的文件格式
-        if file_extension in ['.docx', '.doc', '.pptx', '.txt'] or file_extension == '':
-            try:
-                mtime = os.path.getmtime(str(file_path))
-                current_file_times[file_name] = mtime
-            except OSError:
-                continue
-    
-    # 检查是否有变化
-    if not _knowledge_base_file_times:
-        # 第一次检查，保存文件时间
-        _knowledge_base_file_times = current_file_times
-        return True
-    
-    # 比较文件时间
-    if set(current_file_times.keys()) != set(_knowledge_base_file_times.keys()):
-        # 文件数量发生变化
-        _knowledge_base_file_times = current_file_times
-        return True
-    
-    for file_name, mtime in current_file_times.items():
-        if file_name not in _knowledge_base_file_times or _knowledge_base_file_times[file_name] != mtime:
-            # 文件被修改
-            _knowledge_base_file_times = current_file_times
-            return True
-    
-    return False
-
-def init_knowledge_base():
-    """
-    初始化知识库，在系统启动时调用
-    """
-    global _knowledge_base_cache, _knowledge_base_load_time
-    
-    util.log(1, "初始化本地知识库...")
-    _knowledge_base_cache = load_local_knowledge_base()
-    _knowledge_base_load_time = time.time()
-    
-    # 初始化文件修改时间跟踪
-    check_knowledge_base_changes()
-    
-    util.log(1, f"知识库初始化完成，共 {len(_knowledge_base_cache)} 个文件")
-
-def get_knowledge_base():
-    """
-    获取知识库，使用缓存机制
-    
-    返回:
-        dict: 知识库内容
-    """
-    global _knowledge_base_cache, _knowledge_base_load_time
-    
-    # 如果缓存为空，先初始化
-    if _knowledge_base_cache is None:
-        init_knowledge_base()
-        return _knowledge_base_cache
-    
-    # 检查文件是否有变化
-    if check_knowledge_base_changes():
-        util.log(1, "检测到知识库文件变化，正在重新加载...")
-        _knowledge_base_cache = load_local_knowledge_base()
-        _knowledge_base_load_time = time.time()
-        util.log(1, f"知识库重新加载完成，共 {len(_knowledge_base_cache)} 个文件")
-    
-    return _knowledge_base_cache
-
 
 # 定时保存记忆的线程
 def memory_scheduler_thread():
@@ -2291,6 +1686,16 @@ def _auto_reply_after_execution(username, finished_exec_state):
         util.log(1, f"自动回复触发失败: {exc}")
 
 
+def _is_single_model_mode() -> bool:
+    """是否为单模型模式（未配置 big_model_engine）。
+
+    单模型模式下，工具调用同步执行（不开后台线程），用小模型完成工具循环 + 最终回复。
+    双模型模式下，工具调用走 ExecutionManager 后台线程，由大模型执行工具循环。
+    """
+    cfg.load_config()
+    return not bool(cfg.big_model_engine)
+
+
 def question(content, username, observation=None):
     """处理用户提问并返回回复。工具执行统一走后台线程，所有接口行为一致。"""
     global agents, current_username
@@ -2553,9 +1958,6 @@ def question(content, username, observation=None):
         spec = _build_workflow_tool_spec(tool_def)
         if spec:
             tool_registry[spec.name] = spec
-    if tool_registry and not _LANGGRAPH_AVAILABLE:
-        util.log(1, "langgraph is unavailable, workflow tools are disabled and the app will use direct LLM mode.")
-        tool_registry = {}
 
     try:
         from utils.stream_state_manager import get_state_manager as _get_state_manager
@@ -2665,186 +2067,6 @@ def question(content, username, observation=None):
             full_response_text += prestart_stream_text
             is_first_sentence = False
 
-    def run_workflow(tool_registry: Dict[str, WorkflowToolSpec]) -> bool:
-        nonlocal accumulated_text, full_response_text, is_first_sentence, messages_buffer
-        if _WORKFLOW_APP is None:
-            return False
-
-        # 创建规划器流式回调，用于实时输出 finish+message 响应
-        planner_stream_buffer = {"text": "", "first_chunk": True}
-
-        def planner_stream_callback(chunk_text: str) -> None:
-            """规划器流式回调，将 message 内容实时输出"""
-            nonlocal accumulated_text, full_response_text, is_first_sentence, is_agent_think_start
-            if not chunk_text:
-                return
-            planner_stream_buffer["text"] += chunk_text
-            if planner_stream_buffer["first_chunk"]:
-                planner_stream_buffer["first_chunk"] = False
-                if is_agent_think_start:
-                    closing = "</think>"
-                    accumulated_text += closing
-                    full_response_text += closing
-                    is_agent_think_start = False
-            # 使用 stream_response_chunks 的逻辑进行分句流式输出
-            accumulated_text += chunk_text
-            full_response_text += chunk_text
-            # 检查是否有完整句子可以输出
-            if len(accumulated_text) >= 20:
-                while True:
-                    last_punct_pos = _find_last_safe_punct(accumulated_text, punctuation_list)
-                    if last_punct_pos > 10:
-                        sentence_text = accumulated_text[: last_punct_pos + 1]
-                        write_sentence(sentence_text, force_first=is_first_sentence)
-                        is_first_sentence = False
-                        accumulated_text = accumulated_text[last_punct_pos + 1 :].lstrip()
-                    else:
-                        break
-
-        initial_state: AgentState = {
-            "request": content,
-            "messages": messages_buffer,
-            "tool_results": [],
-            "audit_log": [],
-            "status": "planning",
-            "max_steps": 30,
-            "context": {
-                "system_prompt": system_prompt,
-                "observation": observation,
-                "memory_context": memory_context,
-                "prestart_context": prestart_context,
-                "tool_registry": tool_registry,
-                "planner_stream_callback": planner_stream_callback,  # 传入流式回调
-                "username": username,  # 传入用户名
-            },
-        }
-
-        config = {"configurable": {"thread_id": f"workflow-{username}-{conversation_id}"}}
-        workflow_app = _WORKFLOW_APP
-        is_agent_think_start = False
-        final_state: Optional[AgentState] = None
-        final_stream_done = False
-
-        try:
-            for event in workflow_app.stream(initial_state, config=config, stream_mode="updates"):
-                if sm.should_stop_generation(username, conversation_id=conversation_id):
-                    util.log(1, f"检测到停止标志，中断工作流生成: {username}")
-                    break
-                step, state = next(iter(event.items()))
-                final_state = state
-                status = state.get("status")
-
-                state_messages = state.get("messages") or []
-                if state_messages and len(state_messages) > len(messages_buffer):
-                    messages_buffer.extend(state_messages[len(messages_buffer):])
-                    if len(messages_buffer) > 60:
-                        del messages_buffer[:-60]
-
-                if step == "plan_next":
-                    if status == "needs_tool":
-                        next_action = state.get("next_action") or {}
-                        tool_name = next_action.get("name") or "unknown_tool"
-                        tool_args = next_action.get("args") or {}
-                        audit_log = state.get("audit_log") or []
-                        decision_note = audit_log[-1] if audit_log else ""
-                        if "->" in decision_note:
-                            decision_note = decision_note.split("->", 1)[1].strip()
-                        args_text = json.dumps(tool_args, ensure_ascii=False)
-                        message_lines = [
-                            "[PLAN] Planner preparing to call a tool.",
-                            f"[PLAN] Decision: {decision_note}" if decision_note else "[PLAN] Decision: (missing)",
-                            f"[PLAN] Tool: {tool_name}",
-                            f"[PLAN] Args: {args_text}",
-                        ]
-                        message = "\n".join(message_lines) + "\n"
-                        if not is_agent_think_start:
-                            message = "<think>" + message
-                            is_agent_think_start = True
-                        write_sentence(message, force_first=is_first_sentence)
-                        is_first_sentence = False
-                        full_response_text += message
-                        append_to_buffer('assistant', message.strip())
-                    elif status == "completed" and not final_stream_done:
-                        closing = "</think>" if is_agent_think_start else ""
-                        final_messages = state.get("final_messages")
-                        final_response = state.get("final_response")
-                        was_streamed = state.get("_response_streamed", False)
-                        success = False
-
-                        if was_streamed:
-                            # 响应已通过流式回调输出，只需添加 closing 标签
-                            if closing:
-                                # closing 应该在流式内容之前，但由于已经流式输出了内容
-                                # 这里需要特殊处理：如果有 think 标签，在开头已经输出过了
-                                pass
-                            success = True
-                            util.log(1, "规划器响应已流式输出，跳过重复输出")
-                        elif final_messages:
-                            try:
-                                stream_response_chunks(llm.stream(final_messages), prepend_text=closing)
-                                success = True
-                            except requests.exceptions.RequestException as stream_exc:
-                                util.log(1, f"最终回复流式输出失败: {stream_exc}")
-                        elif final_response:
-                            stream_response_chunks([closing + final_response])
-                            success = True
-                        elif closing:
-                            accumulated_text += closing
-                            full_response_text += closing
-                        final_stream_done = success
-                        is_agent_think_start = False
-                elif step == "call_tool":
-                    history = state.get("tool_results") or []
-                    if history:
-                        last = history[-1]
-                        call_info = last.get("call", {}) or {}
-                        tool_name = call_info.get("name") or "unknown_tool"
-                        success = last.get("success", False)
-                        status_text = "SUCCESS" if success else "FAILED"
-                        args_text = json.dumps(call_info.get("args") or {}, ensure_ascii=False)
-                        message_lines = [
-                            f"[TOOL] {tool_name} execution {status_text}.",
-                            f"[TOOL] Args: {args_text}",
-                        ]
-                        if last.get("output"):
-                            message_lines.append(f"[TOOL] Output: {_truncate_text(last['output'], 120)}")
-                        if last.get("error"):
-                            message_lines.append(f"[TOOL] Error: {last['error']}")
-                        message = "\n".join(message_lines) + "\n"
-                        write_sentence(message, force_first=is_first_sentence)
-                        is_first_sentence = False
-                        full_response_text += message
-                        append_to_buffer('assistant', message.strip())
-                elif step == "__end__":
-                    break
-        except Exception as exc:
-            util.log(1, f"执行工具工作流时出错: {exc}")
-            if is_agent_think_start:
-                closing = "</think>"
-                accumulated_text += closing
-                full_response_text += closing
-            return False
-
-        if final_state is None:
-            if is_agent_think_start:
-                closing = "</think>"
-                accumulated_text += closing
-                full_response_text += closing
-            return False
-
-        if not final_stream_done and is_agent_think_start:
-            closing = "</think>"
-            accumulated_text += closing
-            full_response_text += closing
-            util.log(1, f"工具工作流未能完成，状态: {final_state.get('status')}")
-
-        final_state_messages = final_state.get("messages") if final_state else None
-        if final_state_messages and len(final_state_messages) > len(messages_buffer):
-            messages_buffer.extend(final_state_messages[len(messages_buffer):])
-            if len(messages_buffer) > 20:
-                del messages_buffer[:-20]
-
-        return final_stream_done
 
     def run_direct_llm() -> bool:
         nonlocal full_response_text, accumulated_text, is_first_sentence, messages_buffer
@@ -2853,7 +2075,7 @@ def question(content, username, observation=None):
                 "request": content,
                 "messages": messages_buffer,
                 "tool_results": [],
-                "planner_preview": None,
+                "judge_preview": None,
                 "context": {
                     "system_prompt": system_prompt,
                     "observation": observation,
@@ -2928,7 +2150,7 @@ def question(content, username, observation=None):
             "request": content,
             "messages": messages_buffer,
             "tool_results": finished_state.tool_results,
-            "planner_preview": hint,
+            "judge_preview": hint,
             "context": {
                 "system_prompt": enhanced_system,
                 "observation": observation,
@@ -3004,7 +2226,7 @@ def question(content, username, observation=None):
             finalize_stream(force_end=True)
         return _end_session_and_remember(full_response_text)
 
-    # 提取知识库摘要给规划器（让它知道能查什么主题）
+    # 提取知识库摘要给闲聊判断器（让它知道能查什么主题）
     knowledge_hint = ""
     try:
         resource_text = mcp_runtime.get_all_resource_texts()
@@ -3015,7 +2237,7 @@ def question(content, username, observation=None):
         pass
 
     # 有工具：小模型带流式回调做规划，finish 时直接流出，tool 时提交后台
-    plan_state: AgentState = {
+    judge_state: AgentState = {
         "request": content,
         "messages": messages_buffer,
         "tool_results": [],
@@ -3032,7 +2254,7 @@ def question(content, username, observation=None):
     }
 
     def _first_plan_stream_callback(chunk_text: str) -> None:
-        """规划器流式回调：finish 时实时把回复内容流给用户"""
+        """闲聊判断器流式回调：finish 时实时把回复内容流给用户"""
         nonlocal accumulated_text, full_response_text, is_first_sentence
         if not chunk_text:
             return
@@ -3056,13 +2278,13 @@ def question(content, username, observation=None):
         is_first_sentence = False
 
     try:
-        first_decision = _call_planner_llm(
-            plan_state,
+        first_decision = _call_judge_llm(
+            judge_state,
             stream_callback=_first_plan_stream_callback,
             on_tool_detected=_on_tool_detected,
         )
     except Exception as llm_err:
-        util.log(1, f"[大小模型] {username}: 规划器LLM调用失败: {llm_err}")
+        util.log(1, f"[大小模型] {username}: 闲聊判断器LLM调用失败: {llm_err}")
         error_reply = "抱歉，我的大脑暂时开了小差，请稍后再试一下。"
         write_sentence(error_reply, force_first=is_first_sentence)
         if not sm.should_stop_generation(username, conversation_id=conversation_id):
@@ -3073,7 +2295,7 @@ def question(content, username, observation=None):
     # ---- 提交后台工具执行的通用函数 ----
     def _submit_tool_execution(tool_decision, show_plan_msg=True, unverified_response=""):
         """提交工具执行到后台，返回 "" 表示等待后台完成。
-        unverified_response: 规划器先输出的未核实回复（兜底核实场景传入）。
+        unverified_response: 闲聊判断器先输出的未核实回复（兜底核实场景传入）。
         """
         nonlocal is_first_sentence
         t_name = tool_decision.get("tool", "工具")
@@ -3106,6 +2328,26 @@ def question(content, username, observation=None):
             on_complete=_on_bg_complete,
         )
 
+        if _is_single_model_mode():
+            # 单模型模式：同步执行工具循环（用小模型实例），不开后台线程
+            # 工具循环跑完后直接调 _auto_reply_after_execution 流式输出最终回复
+            util.log(1, f"[单模型] {username}: 同步执行工具循环（无后台大模型）")
+            exec_state.on_complete = None
+            from llm.execution_manager import _big_model_execute
+            try:
+                _big_model_execute(exec_state, llm_role="small")
+                exec_state.status = ExecutionStatus.DONE
+            except Exception as e:
+                exec_state.error = str(e)
+                exec_state.status = ExecutionStatus.FAILED
+            exec_state.end_time = time.time()
+            try:
+                _auto_reply_after_execution(username, exec_state)
+            except Exception as e:
+                util.log(1, f"[单模型] {username}: 自动回复失败: {e}")
+            return ""
+
+        # 双模型模式：提交后台大模型执行
         if exec_mgr.submit(exec_state):
             util.log(1, f"[大小模型] {username}: 后台任务已提交，等待执行完成")
         else:
@@ -3117,58 +2359,25 @@ def question(content, username, observation=None):
         return ""
 
     if first_action == "tool":
-        # 不是闲聊 → 走工具执行（规划器只做闲聊判断）
+        # 不是闲聊 -> 走工具执行（闲聊判断器只做闲聊判断）
+        # 不硬塞首工具，交由大模型/单模型自行规划首步
         already_notified = first_decision.get("_tool_early_streamed", False)
-        if "kb_search" in tool_registry:
-            # 知识问答场景：先用 kb_search 搜一次，后续步骤由大模型决定
-            search_query = (first_decision.get("keyword") or "").strip() or content.strip()
-            return _submit_tool_execution(
-                {"tool": "kb_search", "args": {"query": search_query}},
-                show_plan_msg=not already_notified,
-            )
-        # 无 kb_search（如纯 MCP 工具场景）→ 不硬塞首工具，交由大模型自行规划
         return _submit_tool_execution(
             {"tool": None, "args": {}},
             show_plan_msg=not already_notified,
         )
 
     else:
-        # 闲聊 — 内容已通过 stream_callback 流式输出
+        # 闲聊 - 内容已通过 stream_callback 流式输出
         finish_msg = first_decision.get("message", "")
-
-        # ---- 兜底：闲聊判断器的 finish 不该产生长回复 ----
-        # 真正的闲聊（问候、确认、简短回答）一般不超过 80 字
-        # 超过说明弱模型在 finish 里编造事实性内容，追加工具核实
-        # 条件：有任何可用工具 + finish 内容超过 80 字 + 用户消息非纯语气词（>3字）
-        has_tools = bool(tool_registry)
-        user_msg_stripped = content.strip()
-        need_verify = (has_tools
-                       and len(finish_msg) > 80
-                       and len(user_msg_stripped) > 3)
-        if need_verify:
-            util.log(1, f"[大小模型] {username}: 闲聊判断器 finish 过长({len(finish_msg)}字)，追加核实")
-            if accumulated_text:
-                write_sentence(accumulated_text, force_first=is_first_sentence)
-                is_first_sentence = False
-                accumulated_text = ""
-            verify_msg = "\n\n等等，我再帮你核实一下…\n\n---\n"
-            write_sentence(verify_msg)
-            full_response_text += verify_msg
-            # 不硬编码工具，交由大模型基于 unverified_response 自行选择核实工具
-            return _submit_tool_execution(
-                {"tool": None, "args": {}},
-                show_plan_msg=False,
-                unverified_response=finish_msg,
-            )
-
         was_streamed = first_decision.get("_streamed", False)
-        if not was_streamed:
-            if finish_msg:
-                stream_response_chunks([finish_msg])
+        if not was_streamed and finish_msg:
+            stream_response_chunks([finish_msg])
 
         if not sm.should_stop_generation(username, conversation_id=conversation_id):
             finalize_stream(force_end=True)
         return _end_session_and_remember(full_response_text)
+
 def set_memory_cleared_flag(flag=True):
     """
     设置记忆清除标记

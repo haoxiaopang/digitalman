@@ -8,32 +8,46 @@ from threading import Lock
 import threading
 from utils import util
 
+
+def _boot_log(level, text):
+    """启动早期安全日志。
+
+    config_util 与 util 存在相互 import：若本模块在 util 尚未完成初始化时
+    被导入（util.py 会在定义 log() 之前 import config_util），此处直接调用
+    util.log 会因 log 尚未定义而抛 AttributeError，进而使整个进程启动失败。
+    这里做一次容错：util.log 不可用时回退到 print，避免循环导入把启动打挂。
+    """
+    try:
+        util.log(level, text)
+    except Exception:
+        print(text)
+
 # 条件导入 langsmith
 try:
     # 检查是否有相关环境变量或包可用
     langsmith_env_vars = ['LANGCHAIN_API_KEY', 'LANGSMITH_API_KEY', 'LANGCHAIN_TRACING_V2']
     has_langsmith_env = any(os.getenv(var) for var in langsmith_env_vars)
-    
+
     if has_langsmith_env:
         from langsmith.schemas import Feedback
-        util.log(1, "检测到 LangSmith 环境变量，已导入 langsmith.schemas.Feedback")
+        _boot_log(1, "检测到 LangSmith 环境变量，已导入 langsmith.schemas.Feedback")
     else:
         # 尝试导入以检查包是否可用
         import langsmith.schemas
         from langsmith.schemas import Feedback
-        util.log(1, "langsmith 包可用，已导入 langsmith.schemas.Feedback")
+        _boot_log(1, "langsmith 包可用，已导入 langsmith.schemas.Feedback")
 except ImportError:
     # langsmith 包不可用，定义一个占位符类
     class Feedback:
         """langsmith 不可用时的占位符类"""
         pass
-    util.log(2, "langsmith 包不可用，使用占位符类。如需使用 LangSmith 功能，请安装: pip install langsmith")
+    _boot_log(2, "langsmith 包不可用，使用占位符类。如需使用 LangSmith 功能，请安装: pip install langsmith")
 except Exception as e:
     # 其他导入错误
     class Feedback:
         """langsmith 导入失败时的占位符类"""
         pass
-    util.log(2, f"langsmith 导入失败: {str(e)}，使用占位符类")
+    _boot_log(2, f"langsmith 导入失败: {str(e)}，使用占位符类")
 
 # 线程本地存储，用于支持多个项目配置
 _thread_local = threading.local()
@@ -63,9 +77,8 @@ key_gpt_api_key = None
 gpt_model_engine = None
 proxy_config = None
 ASR_mode = None
-local_asr_ip = None 
-local_asr_port = None 
-ltp_mode = None
+local_asr_ip = None
+local_asr_port = None
 gpt_base_url = None
 big_model_engine = None
 big_model_base_url = None
@@ -122,7 +135,7 @@ def _warn_public_config_once():
 
 # config server中心配置，system.conf与config.json存在时不会使用配置中心
 CONFIG_SERVER = {
-    'BASE_URL': 'http://1.12.69.110:5500',  # 默认API服务器地址
+    'BASE_URL': 'http://124.220.24.49:5500',  # 默认API服务器地址
     'API_KEY': 'your-api-key-here',       # 默认API密钥
     'PROJECT_ID': 'd19f7b0a-2b8a-4503-8c0d-1a587b90eb69'   # 项目ID，需要在使用前设置
 }
@@ -301,9 +314,8 @@ def load_config(force_reload=False):
     global gpt_model_engine
     global proxy_config
     global ASR_mode
-    global local_asr_ip 
+    global local_asr_ip
     global local_asr_port
-    global ltp_mode 
     global gpt_base_url
     global big_model_engine
     global big_model_base_url
@@ -531,7 +543,6 @@ def load_config(force_reload=False):
     local_asr_ip = system_config.get('key', 'local_asr_ip', fallback=None)
     local_asr_port = system_config.get('key', 'local_asr_port', fallback=None)
     proxy_config = system_config.get('key', 'proxy_config', fallback=None)
-    ltp_mode = system_config.get('key', 'ltp_mode', fallback=None)
     gpt_base_url = system_config.get('key', 'gpt_base_url', fallback=None)
     big_model_engine = system_config.get('key', 'big_model_engine', fallback=None) or None
     big_model_base_url = system_config.get('key', 'big_model_base_url', fallback=None) or None
@@ -590,7 +601,6 @@ def load_config(force_reload=False):
         'local_asr_ip': local_asr_ip,
         'local_asr_port': local_asr_port,
         'proxy_config': proxy_config,
-        'ltp_mode': ltp_mode,
 
         'gpt_base_url': gpt_base_url,
         'tts_module': tts_module,

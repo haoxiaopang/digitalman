@@ -308,11 +308,15 @@ class Recorder:
                             time.sleep(0.01)
                         for i in range(len(self.__history_data) - 1): #当前data在下面会做发送，这里是发送激活前的音频数据，以免漏掉信息
                             buf = self.__history_data[i]
-                            audio_data_list.append(self.__process_audio_data(buf, self.channels))
+                            #重采样：采集设备非 16kHz 时，统一重采样到 16kHz 再送 ASR
+                            mono_data = self.__process_audio_data(buf, self.channels)
+                            if self.sample_rate != 16000:
+                                mono_data = self._resample_audio(mono_data, self.sample_rate, 16000)
+                            audio_data_list.append(mono_data)
                             if self.ASRMode == "ali":
-                                self.__aLiNls.send(self.__process_audio_data(buf, self.channels).tobytes())
+                                self.__aLiNls.send(mono_data.tobytes())
                             else:
-                                concatenated_audio.extend(self.__process_audio_data(buf, self.channels).tobytes())
+                                concatenated_audio.extend(mono_data.tobytes())
                         self.__history_data.clear()
                 else:#结束拾音
                     last_mute_time = time.time()
@@ -330,11 +334,15 @@ class Recorder:
                 
                 #拾音中
                 if isSpeaking:
-                    audio_data_list.append(self.__process_audio_data(data, self.channels))
+                    #重采样：采集设备非 16kHz 时，统一重采样到 16kHz 再送 ASR
+                    mono_data = self.__process_audio_data(data, self.channels)
+                    if self.sample_rate != 16000:
+                        mono_data = self._resample_audio(mono_data, self.sample_rate, 16000)
+                    audio_data_list.append(mono_data)
                     if self.ASRMode == "ali":
-                        self.__aLiNls.send(self.__process_audio_data(data, self.channels).tobytes())
+                        self.__aLiNls.send(mono_data.tobytes())
                     else:
-                        concatenated_audio.extend(self.__process_audio_data(data, self.channels).tobytes())
+                        concatenated_audio.extend(mono_data.tobytes())
             except Exception as e:
                 util.printInfo(1, self.username, "录音失败: " + str(e))
 
@@ -390,7 +398,18 @@ class Recorder:
         # 将累积的音频数据块连接起来
         data = np.concatenate(audio_data_list)
         return data
-    
+
+    #重采样：将单声道 int16 音频从 orig_rate 重采样到 target_rate（默认 16kHz，ASR 要求）
+    def _resample_audio(self, data: np.ndarray, orig_rate: int, target_rate: int = 16000) -> np.ndarray:
+        """将 numpy int16 数组从 orig_rate 重采样到 target_rate"""
+        if orig_rate == target_rate:
+            return data
+        import scipy.signal  # 惰性导入：仅非 16kHz 设备需要，避免 scipy 成为硬依赖
+        # 转为 float32 进行重采样（避免溢出），再四舍五入回 int16
+        float_data = data.astype(np.float32)
+        resampled = scipy.signal.resample_poly(float_data, target_rate, orig_rate)
+        return np.round(resampled).astype(np.int16)
+
     #转变为单声道np.int16
     def __process_audio_data(self, data, channels):
         data = bytearray(data)

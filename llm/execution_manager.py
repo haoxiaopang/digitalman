@@ -412,15 +412,19 @@ def _extract_decision(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _big_model_execute(state: ExecutionState):
-    """大模型后台线程入口：从小模型的第一轮规划结果开始执行工具循环。"""
+def _big_model_execute(state: ExecutionState, llm_role: str = "big"):
+    """工具循环执行入口：从首步规划开始执行工具调用循环。
+
+    llm_role="big"  走大模型实例（双模型模式，由后台线程调用）
+    llm_role="small" 走小模型实例（单模型模式，由 question() 同步调用）
+    """
     from llm.nlp_cognitive_stream import (
         _remove_think_from_text,
         _strip_json_code_fence,
     )
 
-    util.log(1, f"[大模型执行] {state.username}: 后台线程启动，first_plan={state.first_plan}")
-    big_llm = _get_llm_instance("big", streaming=False)
+    util.log(1, f"[工具执行] {state.username}: 启动 (role={llm_role}), first_plan={state.first_plan}")
+    big_llm = _get_llm_instance(llm_role, streaming=False)
     tool_registry = state.tool_registry
     max_steps = 30
 

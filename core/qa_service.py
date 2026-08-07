@@ -10,27 +10,9 @@ import time
 from utils import util
 
 class QAService:
-    
-    def __init__(self):
-         # 人设提问关键字
-        self.attribute_keyword = [
-            [['你叫什么名字', '你的名字是什么'], 'name'],
-            [['你是男的还是女的', '你是男生还是女生', '你的性别是什么', '你是男生吗', '你是女生吗', '你是男的吗', '你是女的吗', '你是男孩子吗', '你是女孩子吗', ], 'gender', ],
-            [['你今年多大了', '你多大了', '你今年多少岁', '你几岁了', '你今年几岁了', '你今年几岁了', '你什么时候出生', '你的生日是什么', '你的年龄'], 'age', ],
-            [['你的家乡在哪', '你的家乡是什么', '你家在哪', '你住在哪', '你出生在哪', '你的出生地在哪', '你的出生地是什么', ], 'birth', ],
-            [['你的生肖是什么', '你属什么', ], 'zodiac', ],
-            [['你是什么座', '你是什么星座', '你的星座是什么', ], 'constellation', ],
-            [['你是做什么的', '你的职业是什么', '你是干什么的', '你的职位是什么', '你的工作是什么', '你是做什么工作的'], 'job', ],
-            [['你的爱好是什么', '你有爱好吗', '你喜欢什么', '你喜欢做什么'], 'hobby'],
-            [['联系方式', '联系你们', '怎么联系客服', '有没有客服'], 'contact']
-        ]
 
-        self.command_keyword = [
-            [['关闭', '再见', '你走吧'], 'stop'],
-            [['静音', '闭嘴', '我想静静'], 'mute'],
-            [['取消静音', '你在哪呢', '你可以说话了'], 'unmute'],
-            [['换个性别', '换个声音'], 'changeVoice']
-        ]
+    def __init__(self):
+        pass
 
     def question(self, query_type, text):
         if query_type == 'qa':
@@ -39,14 +21,6 @@ class QAService:
             if action:
                 MyThread(target=self.__run, args=[action]).start()
             return answer, 'qa'
-    
-        elif query_type == 'Persona':
-            answer_dict = self.attribute_keyword
-            answer, action  = self.__get_keyword(answer_dict, text, query_type)
-            return answer, 'Persona'
-        elif query_type == 'command':
-            answer, action  = self.__get_keyword(self.command_keyword, text, query_type)
-            return answer, 'command'
         return None, None
 
     def __run(self, action):
