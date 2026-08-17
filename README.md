@@ -90,30 +90,76 @@ python main.py start -config_center d19f7b0a-2b8a-4503-8c0d-1a587b90eb69  #使�
 https://www.compshare.cn/images/compshareImage-1cft3sk9gvta?ytag=GPU_fay
 ```
 
-### **Docker Compose 部署 Fay 与配置管理中心**
+### **Docker Compose 部署（Fay + 配置中心 + Mate Human）**
 
-项目根目录的 Compose 配置会同时启动 Fay、[fay_config_server](https://github.com/xszyou/fay_config_server) 和 [mate-human](https://gitee.com/garveyer/mate-human)。配置中心使用 `5500` 端口，Fay 管理页面使用 `5000` 端口，Fay 内置 MCP 管理服务使用 `5010` 端口，Mate Human 前端使用 `5173` 端口。
+项目根目录的 `docker-compose.yml` 会启动三个服务：Fay 后端、[fay_config_server](https://github.com/xszyou/fay_config_server) 配置中心和 [mate-human](https://gitee.com/garveyer/mate-human) Live2D 前端。首次构建需要访问 Docker 镜像仓库、代码仓库和 npm/PyPI 软件源。
 
-1. 创建本地 Compose 环境变量文件：
+#### 环境要求
+
+- Docker Engine
+- Docker Compose v2，确认命令为 `docker compose version`
+- 在 Fay 项目根目录执行命令
+- 主机端口 `5000`、`5010`、`5173`、`5500`、`10001`、`10002`、`10003` 未被其他程序占用
+
+#### 首次启动
+
+1. 创建环境变量文件：
 
 ```shell
 cp .env.example .env
 ```
 
-2. 构建并启动三个服务：
+2. 编辑 `.env`。至少应修改配置中心 API key 和 session 密钥；`FAY_CONFIG_CENTER_ID` 首次可以留空：
+
+```dotenv
+FAY_CONFIG_CENTER_ID=
+FAY_CONFIG_CENTER_API_KEY=请替换为本地随机密钥
+FAY_CONFIG_CENTER_SECRET_KEY=请替换为本地随机长字符串
+FAY_CONFIG_CENTER_URL=http://fay-config-server:5500
+```
+
+`FAY_CONFIG_CENTER_URL` 是容器内部地址，必须使用 `fay-config-server`，不要在这里填写 `127.0.0.1` 或 `localhost`。
+
+3. 启动前检查 Compose 配置：
+
+```shell
+docker compose config
+```
+
+4. 构建并启动三个服务：
 
 ```shell
 docker compose up -d --build
 ```
 
-3. 首次使用时打开配置中心 `http://127.0.0.1:5500`，使用默认账号登录：
+5. 查看服务状态和日志：
+
+```shell
+docker compose ps
+docker compose logs -f fay fay-config-server mate-human
+```
+
+#### 服务地址
+
+| 服务 | 地址 | 用途 |
+| --- | --- | --- |
+| Fay | `http://127.0.0.1:5000` | Web 管理页、HTTP API 和音频文件 |
+| Fay MCP | `http://127.0.0.1:5010/Page3` | MCP 管理页 |
+| Fay WebSocket | `ws://127.0.0.1:10002` | Mate Human 接收音频、口型和动作消息 |
+| Fay UI WebSocket | `ws://127.0.0.1:10003` | Fay Web 管理界面通信 |
+| 配置中心 | `http://127.0.0.1:5500` | 管理 `system.conf` 和 `config.json` |
+| Mate Human | `http://127.0.0.1:5173` | Live2D 数字人前端 |
+
+#### 配置中心初始化
+
+首次打开 `http://127.0.0.1:5500`，使用默认本地账号登录：
 
 ```text
 用户名：admin
 密码：admin
 ```
 
-创建新项目时，将项目路径填写为配置中心容器内的：
+默认账号只适合本机测试，不要直接将 `5500` 暴露到公网。创建项目时，项目路径填写配置中心容器内的路径：
 
 ```text
 /source/fay
@@ -125,32 +171,55 @@ docker compose up -d --build
 FAY_CONFIG_CENTER_ID=<项目UUID>
 ```
 
-然后重启 Fay：
+然后仅重启 Fay：
 
 ```shell
 docker compose up -d fay
 ```
 
-Fay 容器通过 `http://fay-config-server:5500` 访问配置中心，两个服务共用 `.env` 中的 `FAY_CONFIG_CENTER_API_KEY`。配置中心项目数据保存在 Docker 命名卷 `fay_config_projects` 中；在配置中心修改配置后，重启 Fay 才会重新加载：
+Fay 会通过 Compose 内部网络访问配置中心，并优先加载该项目配置。配置中心数据保存在 Docker 命名卷 `fay_config_projects` 中；修改配置中心内容后需要重新加载 Fay：
 
 ```shell
 docker compose restart fay
 ```
 
-查看运行状态和日志：
+如果 `FAY_CONFIG_CENTER_ID` 留空，Fay 使用项目根目录的本地 `system.conf` 和 `config.json`。
+
+#### 按服务更新和停止
+
+只修改了 Fay 代码或 [Dockerfile](Dockerfile) 时：
 
 ```shell
-docker compose ps
-docker compose logs -f fay fay-config-server
+docker compose up -d --build fay
 ```
 
-Mate Human 是 Live2D 前端，Compose 会从 `mate-human/` 目录构建静态资源并由 Nginx 提供服务。浏览器访问：
+只修改了 Mate Human 前端时：
 
-```text
-http://127.0.0.1:5173
+```shell
+docker compose up -d --build mate-human
 ```
 
-前端通过浏览器访问宿主机已映射的 Fay `10002` WebSocket 和 `5000` 音频接口，因此源码中的 `127.0.0.1` 指向运行浏览器的本机，不应改成 Compose 内部的 `fay` 服务名。
+仅修改配置文件时，不需要构建镜像：
+
+```shell
+docker compose restart fay
+```
+
+停止服务但保留配置中心数据：
+
+```shell
+docker compose down
+```
+
+不要随意使用 `docker compose down -v`，该命令会删除 `fay_config_projects`，导致配置中心创建的项目和配置数据丢失。
+
+#### 运行注意事项
+
+- Mate Human 是浏览器端前端，源码使用 `ws://127.0.0.1:10002` 和 `http://127.0.0.1:5000/audio/...`。在 Docker 主机本机浏览器中访问 `5173` 时可直接工作；远程浏览器访问时，需要将前端中的 `127.0.0.1` 改为 Fay 主机地址，或配置反向代理。
+- 浏览器首次播放 Fay 语音可能触发自动播放限制。进入 Mate Human 页面后先点击一次页面或 `Enable Audio` 解锁按钮，再进行对话。
+- Linux Docker 无法运行 Windows 专用的 `ProcessWAV.exe`。当前 Fay 在 Linux 中使用音频能量生成近似 `Lips` 数据；修改相关代码后必须重新构建 Fay 镜像，单纯 `restart` 不会更新镜像代码。
+- 如果端口冲突，修改 Compose 中左侧的宿主机端口，例如将 `5173:80` 改为 `5174:80`，然后用新的地址访问。
+- `.env` 包含 API key 和密钥，已被 Git 忽略，不要提交到仓库。
 
 ### **个性化配置**
 + 根目录system.conf.bak 重命名为system.conf，并配置里面的内容
@@ -173,17 +242,6 @@ https://qqk9ntwbcit.feishu.cn/wiki/GHevwqxwfiX4hCk8yJCcoJ54nqg
 
 ### ***集成到自家产品（非必须）***
 https://qqk9ntwbcit.feishu.cn/wiki/Mcw3wbA3RiNZzwkexz6cnKCsnhh
-
-
-
-### **联系**
-
-**交流群及资料教程**关注公众号 **fay数字人**（**请先star本仓库**）
-
-
-**商务联系**
-
-qq467665317
 
 
 ## **致谢**
