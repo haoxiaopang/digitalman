@@ -90,11 +90,74 @@ python main.py start -config_center d19f7b0a-2b8a-4503-8c0d-1a587b90eb69  #使�
 https://www.compshare.cn/images/compshareImage-1cft3sk9gvta?ytag=GPU_fay
 ```
 
+### **Docker Compose 部署 Fay 与配置管理中心**
+
+项目根目录的 Compose 配置会同时启动 Fay、[fay_config_server](https://github.com/xszyou/fay_config_server) 和 [mate-human](https://gitee.com/garveyer/mate-human)。配置中心使用 `5500` 端口，Fay 管理页面使用 `5000` 端口，Fay 内置 MCP 管理服务使用 `5010` 端口，Mate Human 前端使用 `5173` 端口。
+
+1. 创建本地 Compose 环境变量文件：
+
+```shell
+cp .env.example .env
+```
+
+2. 构建并启动三个服务：
+
+```shell
+docker compose up -d --build
+```
+
+3. 首次使用时打开配置中心 `http://127.0.0.1:5500`，使用默认账号登录：
+
+```text
+用户名：admin
+密码：admin
+```
+
+创建新项目时，将项目路径填写为配置中心容器内的：
+
+```text
+/source/fay
+```
+
+保存项目后，从浏览器地址 `/project/<项目UUID>/config` 中复制项目 UUID，写入 `.env`：
+
+```dotenv
+FAY_CONFIG_CENTER_ID=<项目UUID>
+```
+
+然后重启 Fay：
+
+```shell
+docker compose up -d fay
+```
+
+Fay 容器通过 `http://fay-config-server:5500` 访问配置中心，两个服务共用 `.env` 中的 `FAY_CONFIG_CENTER_API_KEY`。配置中心项目数据保存在 Docker 命名卷 `fay_config_projects` 中；在配置中心修改配置后，重启 Fay 才会重新加载：
+
+```shell
+docker compose restart fay
+```
+
+查看运行状态和日志：
+
+```shell
+docker compose ps
+docker compose logs -f fay fay-config-server
+```
+
+Mate Human 是 Live2D 前端，Compose 会从 `mate-human/` 目录构建静态资源并由 Nginx 提供服务。浏览器访问：
+
+```text
+http://127.0.0.1:5173
+```
+
+前端通过浏览器访问宿主机已映射的 Fay `10002` WebSocket 和 `5000` 音频接口，因此源码中的 `127.0.0.1` 指向运行浏览器的本机，不应改成 Compose 内部的 `fay` 服务名。
+
 ### **个性化配置**
 + 根目录system.conf.bak 重命名为system.conf，并配置里面的内容
 
 ### **管理页面**
 + 浏览器访问 http://127.0.0.1:5000
++ MCP 管理页面访问 http://127.0.0.1:5010/Page3
 
 ## **高级玩法**
 

@@ -1,0 +1,14 @@
+{
+    "6": {
+        "knowledge://courses": true,
+        "knowledge://courses/course-1774938950343-a4b1b42172/catalog": true,
+        "knowledge://courses/course-fay-big-small-model-collab-9ccda52069/catalog": true,
+        "knowledge://courses/course-fay-devtor-0459fb9773/catalog": true,
+        "knowledge://courses/course-fay-interrupt-channels-e6a6969636/catalog": true,
+        "knowledge://courses/course-fay-kb-intro-71b035bf7e/catalog": true,
+        "knowledge://courses/course-fay-memory-mechanism-d31660b675/catalog": true,
+        "knowledge://courses/course-fay-multi-user-dispatch-0d2b791f78/catalog": true,
+        "knowledge://courses/course-fay-prestart-tag-79362f4327/catalog": true,
+        "knowledge://courses/course-fay-think-tag-1e7ce00a7c/catalog": true
+    }
+}

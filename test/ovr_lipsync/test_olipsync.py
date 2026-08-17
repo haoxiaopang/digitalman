@@ -2,6 +2,8 @@ import subprocess
 import time
 import os
 import sys
+import math
+import platform
 _RUNTIME_DIR = os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 if hasattr(sys, "_MEIPASS"):
     _RUNTIME_DIR = os.path.abspath(sys._MEIPASS)
@@ -43,6 +45,9 @@ class LipSyncGenerator:
         return new_viseme
 
     def generate_visemes(self, wav_filepath):
+        if platform.system() != "Windows":
+            return self.generate_energy_visemes(wav_filepath)
+
         if wav_filepath.endswith(".mp3"):
             wav_filepath = self.convert_mp3_to_wav(wav_filepath)
         else:
@@ -52,6 +57,36 @@ class LipSyncGenerator:
         self.run_exe_and_get_output(arguments)
 
         return self.filter(self.viseme)
+
+    def generate_energy_visemes(self, audio_filepath, frame_ms=33):
+        """Generate an approximate mouth-open sequence on platforms without OVRLipSync."""
+        audio = AudioSegment.from_file(audio_filepath).set_channels(1)
+        samples = audio.get_array_of_samples()
+        samples_per_frame = max(1, int(audio.frame_rate * frame_ms / 1000))
+        if not samples:
+            return []
+
+        rms_values = []
+        for start in range(0, len(samples), samples_per_frame):
+            frame = samples[start:start + samples_per_frame]
+            rms = math.sqrt(sum(sample * sample for sample in frame) / len(frame))
+            rms_values.append(rms)
+
+        peak = max(rms_values) or 1.0
+        visemes = []
+        for rms in rms_values:
+            normalized = rms / peak
+            if normalized < 0.08:
+                visemes.append("sil")
+            elif normalized < 0.25:
+                visemes.append("ih")
+            elif normalized < 0.5:
+                visemes.append("E")
+            elif normalized < 0.75:
+                visemes.append("oh")
+            else:
+                visemes.append("aa")
+        return visemes
         
     def consolidate_visemes(self, viseme_list):
         if not viseme_list:

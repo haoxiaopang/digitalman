@@ -1,1 +1,145 @@
-[]
+[
+  {
+    "node_id": 0,
+    "node_type": "conversation",
+    "content": "主人：ddd\n菲菲：抱歉，我的大脑暂时开了小差，请稍后再试一下。",
+    "importance": 50,
+    "datetime": "2026/08/17 04:56:37",
+    "created": 0,
+    "last_retrieved": 12,
+    "pointer_id": null,
+    "tags": []
+  },
+  {
+    "node_id": 1,
+    "node_type": "conversation",
+    "content": "主人：asdasd\nFeifei：看起来你在随手敲键盘呀～需要我帮你做点什么吗？",
+    "importance": 10,
+    "datetime": "2026/08/17 05:24:51",
+    "created": 1,
+    "last_retrieved": 12,
+    "pointer_id": null,
+    "tags": []
+  },
+  {
+    "node_id": 2,
+    "node_type": "conversation",
+    "content": "主人：你是谁\nFeifei：我是Feifei呀，你的专属数字人助理～可以陪你聊天解闷，也能帮你答疑解惑，随叫随到！",
+    "importance": 70,
+    "datetime": "2026/08/17 05:25:58",
+    "created": 2,
+    "last_retrieved": 12,
+    "pointer_id": null,
+    "tags": []
+  },
+  {
+    "node_id": 3,
+    "node_type": "conversation",
+    "content": "主人：你能做什么\n菲菲：**{\"action\": \"finish\", \"message\": \"我能陪你聊天解闷、帮你答疑解惑，有需要查资料或了解课程内容的时候也可以找我～你尽管说！\"}**",
+    "importance": 70,
+    "datetime": "2026/08/17 05:34:45",
+    "created": 3,
+    "last_retrieved": 12,
+    "pointer_id": null,
+    "tags": []
+  },
+  {
+    "node_id": 4,
+    "node_type": "conversation",
+    "content": "主人：如何实现一个live2d网页数字人\n菲菲：\n要实现Live2D网页数字人，最简单的思路是用Fay这个框架。前端拿pixi-live2d-display这类库把Live2D模型加载到网页上，然后连上Fay启动的WebSocket服务，Fay会把生成的文本和音频推过来，数字人就能边说话边对口型了。整体分三层：最上面是数字人模型，中间是Fay的Agent核心（ASR、TTS、决策都能换），最底层接大模型（DeepSeek、通义都行）。这样一套下来，一个能对话的网页数字人就跑起来了。",
+    "importance": 35,
+    "datetime": "2026/08/17 05:40:00",
+    "created": 4,
+    "last_retrieved": 12,
+    "pointer_id": null,
+    "tags": []
+  },
+  {
+    "node_id": 5,
+    "node_type": "conversation",
+    "content": "主人：你好\n菲菲：**{\"action\": \"finish\", \"message\": \"你好呀～我是菲菲，今天有什么想聊的，或者需要我帮忙的吗？\"}**",
+    "importance": 0,
+    "datetime": "2026/08/17 06:00:57",
+    "created": 5,
+    "last_retrieved": 12,
+    "pointer_id": null,
+    "tags": []
+  },
+  {
+    "node_id": 6,
+    "node_type": "conversation",
+    "content": "主人：你好\n菲菲：你好呀～我在呢，有什么想聊的或者想让我帮忙的，随时说！",
+    "importance": 5,
+    "datetime": "2026/08/17 06:44:49",
+    "created": 6,
+    "last_retrieved": 12,
+    "pointer_id": null,
+    "tags": []
+  },
+  {
+    "node_id": 7,
+    "node_type": "conversation",
+    "content": "主人：？\n菲菲：怎么啦？是遇到什么问题了吗？跟我说说～",
+    "importance": 10,
+    "datetime": "2026/08/17 06:45:16",
+    "created": 7,
+    "last_retrieved": 12,
+    "pointer_id": null,
+    "tags": []
+  },
+  {
+    "node_id": 8,
+    "node_type": "conversation",
+    "content": "主人：你好\n菲菲：你好呀！我是菲菲，一直都在～想随便聊聊还是需要我帮什么忙，尽管开口！",
+    "importance": 0,
+    "datetime": "2026/08/17 07:14:33",
+    "created": 8,
+    "last_retrieved": 12,
+    "pointer_id": null,
+    "tags": []
+  },
+  {
+    "node_id": 9,
+    "node_type": "conversation",
+    "content": "主人：你好\n菲菲：你好呀！我是菲菲～看你连说了好几次啦，是在测试我嘛？哈哈，我很稳的～有什么想聊的直接说就行！",
+    "importance": 5,
+    "datetime": "2026/08/17 07:15:31",
+    "created": 9,
+    "last_retrieved": 12,
+    "pointer_id": null,
+    "tags": []
+  },
+  {
+    "node_id": 10,
+    "node_type": "conversation",
+    "content": "主人：你好\n菲菲：你好呀！这都第几次啦，你是想把我绕晕嘛😄 我一直都在呢，说吧，今天想聊点啥？",
+    "importance": 5,
+    "datetime": "2026/08/17 07:17:37",
+    "created": 10,
+    "last_retrieved": 12,
+    "pointer_id": null,
+    "tags": []
+  },
+  {
+    "node_id": 11,
+    "node_type": "conversation",
+    "content": "主人：你好\n菲菲：你这也太执着了吧～哈哈，我在呢！这次想聊点啥正经的？",
+    "importance": 40,
+    "datetime": "2026/08/17 07:28:41",
+    "created": 11,
+    "last_retrieved": 12,
+    "pointer_id": null,
+    "tags": []
+  },
+  {
+    "node_id": 12,
+    "node_type": "conversation",
+    "content": "主人：你是谁\n菲菲：哈哈，怎么又问一遍啦？我是菲菲呀，你的专属小助理～24小时都在线的那种，想聊天还是想干活，随你安排！",
+    "importance": 15,
+    "datetime": "2026/08/17 07:30:14",
+    "created": 12,
+    "last_retrieved": 12,
+    "pointer_id": null,
+    "tags": []
+  }
+]

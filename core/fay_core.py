@@ -131,30 +131,27 @@ else:
 
 
 
-#windows运行推送唇形数据
+#口型数据生成
 
 
-import platform
+import sys
 
 
-if platform.system() == "Windows":
+_fay_runtime_dir = os.path.abspath(os.path.dirname(__file__))
+if hasattr(sys, "_MEIPASS"):
+    _fay_runtime_dir = os.path.abspath(sys._MEIPASS)
+else:
+    _fay_runtime_dir = os.path.abspath(os.path.join(_fay_runtime_dir, ".."))
 
+_lipsync_dir = os.path.join(_fay_runtime_dir, "test", "ovr_lipsync")
+if _lipsync_dir not in map(os.path.abspath, sys.path):
+    sys.path.insert(0, _lipsync_dir)
 
-    import sys
-
-
-    _fay_runtime_dir = os.path.abspath(os.path.dirname(__file__))
-    if hasattr(sys, "_MEIPASS"):
-        _fay_runtime_dir = os.path.abspath(sys._MEIPASS)
-    else:
-        _fay_runtime_dir = os.path.abspath(os.path.join(_fay_runtime_dir, ".."))
-
-    _lipsync_dir = os.path.join(_fay_runtime_dir, "test", "ovr_lipsync")
-    if _lipsync_dir not in map(os.path.abspath, sys.path):
-        sys.path.insert(0, _lipsync_dir)
-
-
+try:
     from test_olipsync import LipSyncGenerator
+except Exception as lipsync_import_error:
+    LipSyncGenerator = None
+    print(f"口型生成器加载失败: {lipsync_import_error}")
 
 
     
@@ -2268,7 +2265,7 @@ class FeiFei:
                     #计算lips
 
 
-                    if platform.system() == "Windows":
+                    if LipSyncGenerator is not None:
 
 
                         try:
@@ -2293,6 +2290,8 @@ class FeiFei:
 
 
                             util.printInfo(1, interact.data.get("user"),  "唇型数据生成失败")
+                    else:
+                        util.printInfo(1, interact.data.get("user"), "唇型生成器不可用")
 
 
                     sent_count = self.__send_human_audio_ordered(

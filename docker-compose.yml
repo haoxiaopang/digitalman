@@ -1,0 +1,90 @@
+services:
+  fay-config-server:
+    build:
+      context: .
+      dockerfile: config-server.Dockerfile
+    container_name: fay-config-server
+    restart: unless-stopped
+    environment:
+      FAY_CONFIG_CENTER_API_KEY: ${FAY_CONFIG_CENTER_API_KEY:-local-fay-api-key-change-me}
+      SECRET_KEY: ${FAY_CONFIG_CENTER_SECRET_KEY:-local-fay-secret-key-change-me}
+    ports:
+      - "5500:5500"
+    volumes:
+      - fay_config_projects:/opt/fay_config_server/projects
+      - .:/source/fay:ro
+    working_dir: /opt/fay_config_server
+    command:
+      - python
+      - -c
+      - |
+        import os
+        from app import APP_CONFIG, app
+        APP_CONFIG["API_KEY"] = os.environ["FAY_CONFIG_CENTER_API_KEY"]
+        app.run(host="0.0.0.0", port=5500)
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen("http://127.0.0.1:5500/login", timeout=3)
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  fay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fay
+    init: true
+    restart: unless-stopped
+    depends_on:
+      fay-config-server:
+        condition: service_healthy
+    environment:
+      FAY_CONFIG_CENTER_URL: ${FAY_CONFIG_CENTER_URL:-http://fay-config-server:5500}
+      FAY_CONFIG_CENTER_API_KEY: ${FAY_CONFIG_CENTER_API_KEY:-local-fay-api-key-change-me}
+      FAY_CONFIG_CENTER_ID: ${FAY_CONFIG_CENTER_ID:-}
+      PYTHONUNBUFFERED: "1"
+      SDL_AUDIODRIVER: dummy
+    ports:
+      - "5000:5000"
+      - "5010:5010"
+      - "9001:9001"
+      - "10001:10001"
+      - "10002:10002"
+      - "10003:10003"
+    volumes:
+      - .:/app
+    working_dir: /app
+    command:
+      - sh
+      - -c
+      - >-
+        if [ ! -f system.conf ]; then cp system.conf.bak system.conf; fi;
+        exec python main.py start -config_center "$${FAY_CONFIG_CENTER_ID}"
+
+  mate-human:
+    build:
+      context: ./mate-human
+      dockerfile: Dockerfile
+    container_name: mate-human
+    restart: unless-stopped
+    depends_on:
+      - fay
+    ports:
+      - "5173:80"
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - --spider
+        - -q
+        - http://127.0.0.1/healthz
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+volumes:
+  fay_config_projects:

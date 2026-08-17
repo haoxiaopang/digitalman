@@ -135,8 +135,8 @@ def _warn_public_config_once():
 
 # config server中心配置，system.conf与config.json存在时不会使用配置中心
 CONFIG_SERVER = {
-    'BASE_URL': 'http://124.220.24.49:5500',  # 默认API服务器地址
-    'API_KEY': 'your-api-key-here',       # 默认API密钥
+    'BASE_URL': os.getenv('FAY_CONFIG_CENTER_URL', 'http://124.220.24.49:5500'),  # 默认API服务器地址
+    'API_KEY': os.getenv('FAY_CONFIG_CENTER_API_KEY', 'your-api-key-here'),       # 默认API密钥
     'PROJECT_ID': 'd19f7b0a-2b8a-4503-8c0d-1a587b90eb69'   # 项目ID，需要在使用前设置
 }
 
