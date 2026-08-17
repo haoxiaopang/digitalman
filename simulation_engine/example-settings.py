@@ -2,7 +2,7 @@ from pathlib import Path
 import sys
 import os
 
-OPENAI_API_KEY = "sk-REDACTED"
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_API_BASE = "https://api.zyai.online/v1"
 KEY_OWNER = "xszyou"
 

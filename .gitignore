@@ -132,3 +132,4 @@ dmypy.json
 
 samples/sample-*
 system.conf
+cache_data/system.conf

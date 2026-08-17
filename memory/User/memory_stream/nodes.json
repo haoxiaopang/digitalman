@@ -6,7 +6,7 @@
     "importance": 50,
     "datetime": "2026/08/17 04:56:37",
     "created": 0,
-    "last_retrieved": 12,
+    "last_retrieved": 14,
     "pointer_id": null,
     "tags": []
   },
@@ -17,7 +17,7 @@
     "importance": 10,
     "datetime": "2026/08/17 05:24:51",
     "created": 1,
-    "last_retrieved": 12,
+    "last_retrieved": 14,
     "pointer_id": null,
     "tags": []
   },
@@ -28,7 +28,7 @@
     "importance": 70,
     "datetime": "2026/08/17 05:25:58",
     "created": 2,
-    "last_retrieved": 12,
+    "last_retrieved": 14,
     "pointer_id": null,
     "tags": []
   },
@@ -39,7 +39,7 @@
     "importance": 70,
     "datetime": "2026/08/17 05:34:45",
     "created": 3,
-    "last_retrieved": 12,
+    "last_retrieved": 14,
     "pointer_id": null,
     "tags": []
   },
@@ -50,7 +50,7 @@
     "importance": 35,
     "datetime": "2026/08/17 05:40:00",
     "created": 4,
-    "last_retrieved": 12,
+    "last_retrieved": 14,
     "pointer_id": null,
     "tags": []
   },
@@ -61,7 +61,7 @@
     "importance": 0,
     "datetime": "2026/08/17 06:00:57",
     "created": 5,
-    "last_retrieved": 12,
+    "last_retrieved": 14,
     "pointer_id": null,
     "tags": []
   },
@@ -72,7 +72,7 @@
     "importance": 5,
     "datetime": "2026/08/17 06:44:49",
     "created": 6,
-    "last_retrieved": 12,
+    "last_retrieved": 14,
     "pointer_id": null,
     "tags": []
   },
@@ -83,7 +83,7 @@
     "importance": 10,
     "datetime": "2026/08/17 06:45:16",
     "created": 7,
-    "last_retrieved": 12,
+    "last_retrieved": 14,
     "pointer_id": null,
     "tags": []
   },
@@ -94,7 +94,7 @@
     "importance": 0,
     "datetime": "2026/08/17 07:14:33",
     "created": 8,
-    "last_retrieved": 12,
+    "last_retrieved": 14,
     "pointer_id": null,
     "tags": []
   },
@@ -105,7 +105,7 @@
     "importance": 5,
     "datetime": "2026/08/17 07:15:31",
     "created": 9,
-    "last_retrieved": 12,
+    "last_retrieved": 14,
     "pointer_id": null,
     "tags": []
   },
@@ -116,7 +116,7 @@
     "importance": 5,
     "datetime": "2026/08/17 07:17:37",
     "created": 10,
-    "last_retrieved": 12,
+    "last_retrieved": 14,
     "pointer_id": null,
     "tags": []
   },
@@ -127,7 +127,7 @@
     "importance": 40,
     "datetime": "2026/08/17 07:28:41",
     "created": 11,
-    "last_retrieved": 12,
+    "last_retrieved": 14,
     "pointer_id": null,
     "tags": []
   },
@@ -138,7 +138,29 @@
     "importance": 15,
     "datetime": "2026/08/17 07:30:14",
     "created": 12,
-    "last_retrieved": 12,
+    "last_retrieved": 14,
+    "pointer_id": null,
+    "tags": []
+  },
+  {
+    "node_id": 13,
+    "node_type": "conversation",
+    "content": "主人：你好\n菲菲：**{\"action\": \"finish\", \"message\": \"你好你好～你这也太可爱了吧，一直跟我打招呼😄 我在的我在的，说吧～\"}**",
+    "importance": 0,
+    "datetime": "2026/08/17 08:39:12",
+    "created": 13,
+    "last_retrieved": 14,
+    "pointer_id": null,
+    "tags": []
+  },
+  {
+    "node_id": 14,
+    "node_type": "conversation",
+    "content": "主人：今天是星期几\n菲菲：\n今天是2026年8月17日，星期一哦～新的一周开始啦，祝你今天心情好好！",
+    "importance": 10,
+    "datetime": "2026/08/17 08:39:55",
+    "created": 14,
+    "last_retrieved": 14,
     "pointer_id": null,
     "tags": []
   }
